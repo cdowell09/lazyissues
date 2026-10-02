@@ -2,7 +2,7 @@
 
 A fast terminal UI for GitHub Issues, with keyboard and mouse controls for daily triage across your repos and keeping an eye on your team's work.
 
-> **Status:** early development. Nothing is installable yet. The design lives in [CONTEXT.md](https://github.com/cdowell09/lazyissues/blob/main/CONTEXT.md) (the domain language) and [docs/adr/](https://github.com/cdowell09/lazyissues/tree/main/docs/adr) (the decisions behind it).
+> **Status:** early development. The design lives in [CONTEXT.md](https://github.com/cdowell09/lazyissues/blob/main/CONTEXT.md) (the domain language) and [docs/adr/](https://github.com/cdowell09/lazyissues/tree/main/docs/adr) (the decisions behind it).
 
 lazyissues uses your existing `gh` login, opens instantly from a local cache, and refreshes in the background.
 
@@ -159,15 +159,13 @@ The last loaded issues are saved in your platform's cache directory (`~/Library/
 
 ## Install
 
-lazyissues is not on PyPI yet; these commands work once the first release ships.
-
 ```bash
 uv tool install lazyissues
 # or
 pipx install lazyissues
 ```
 
-Until then, run it from a checkout with `uv run lazyissues`. Maintainers cut releases with [docs/RELEASING.md](https://github.com/cdowell09/lazyissues/blob/main/docs/RELEASING.md).
+Maintainers cut releases with [docs/RELEASING.md](https://github.com/cdowell09/lazyissues/blob/main/docs/RELEASING.md).
 
 ## Setup
 
