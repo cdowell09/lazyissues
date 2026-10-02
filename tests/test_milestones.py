@@ -33,7 +33,7 @@ async def test_lists_each_repos_milestones_with_progress_and_issues_by_status():
         "tidepool / v1.0 (1)  ░░░░░░░░░░ 0/1",
         "tidepool#18",
         "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",  # same title, another repo
-        "lanternfish#9",
+        "▾ lanternfish#9",  # a parent, unfolded
         "└ lanternfish#7",
         "└ lanternfish#11",
         "lanternfish#4",

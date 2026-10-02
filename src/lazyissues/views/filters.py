@@ -19,6 +19,7 @@ from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, Op
 from lazyissues import search
 from lazyissues.config import Config, SavedFilter
 from lazyissues.github import Gateway
+from lazyissues.menu import Menu
 from lazyissues.models import IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.store import IssueStore
@@ -84,7 +85,7 @@ class Filters(Widget):
         self.running: SavedFilter | None = None  # the filter whose results show
 
     def compose(self) -> ComposeResult:
-        yield OptionList(id="sidebar")
+        yield Menu(id="sidebar")
         with Vertical():
             yield Static(id="running", markup=False)
             none = Static("No saved filters. Press n in the sidebar to add one.", id="none")

@@ -11,11 +11,12 @@ from dataclasses import replace
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Footer, Markdown, Static
+from textual.widgets import Button, Footer, Markdown, Static
 
+from lazyissues.clipboard import COPY
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Event, EventKind, Issue, IssueDetail
 from lazyissues.mover import Mover
@@ -106,17 +107,21 @@ class IssueDetailScreen(ModalScreen[None]):
         Binding("h", "toggle_activity", "Activity"),
         Binding("m", "move", "Move"),
         Binding("escape", "dismiss", "Close"),
+        COPY,
     ]
 
     DEFAULT_CSS = """
     IssueDetailScreen { align-horizontal: right; }
-    IssueDetailScreen #detail {
+    IssueDetailScreen #panel {
         width: 65%;
         background: $surface;
         border-left: wide $primary;
-        padding: 0 1;
     }
-    IssueDetailScreen.full #detail { width: 100%; border-left: none; }
+    IssueDetailScreen.full #panel { width: 100%; border-left: none; }
+    IssueDetailScreen #close {
+        min-width: 0; padding: 0 1; color: $text-error; background: transparent; text-style: bold;
+    }
+    IssueDetailScreen #detail { padding: 0 1; }
     IssueDetailScreen .title { text-style: bold; }
     IssueDetailScreen .heading { text-style: bold; margin-top: 1; }
     IssueDetailScreen .meta { color: $text-muted; }
@@ -149,7 +154,9 @@ class IssueDetailScreen(ModalScreen[None]):
         return self.issues[self.index]
 
     def compose(self) -> ComposeResult:
-        yield VerticalScroll(id="detail")
+        with Vertical(id="panel"):
+            yield Button("\\[×]", id="close", compact=True, action="screen.dismiss")
+            yield VerticalScroll(id="detail")
         yield Footer()
 
     def on_mount(self) -> None:

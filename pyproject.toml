@@ -51,3 +51,4 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # Textual declares BINDINGS, CSS etc. as mutable class attributes.
 ignore = ["RUF012"]
+allowed-confusables = ["×"]  # the detail's close control

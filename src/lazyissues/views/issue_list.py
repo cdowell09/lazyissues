@@ -11,11 +11,15 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import var
+from textual.selection import Selection
+from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
@@ -38,6 +42,38 @@ from lazyissues.view_model import (
 )
 
 COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
+FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
+
+
+class IssueTable(DataTable):
+    """The list's table, whose text a drag selects. (Textual's table has no selection.)
+
+    Clicks are the list's to handle (`IssueList.on_click`): Textual's table opens a row
+    only on a second click on the same cell.
+    """
+
+    ALLOW_SELECT = True
+
+    def on_click(self, event: events.Click) -> None:
+        event.prevent_default()
+
+    def render_line(self, y: int) -> Strip:
+        # Offsets tell a drag which character is where; selections are in on-screen lines.
+        line = super().render_line(y).apply_offsets(0, y)
+        span = self.text_selection.get_span(y) if self.text_selection else None
+        if span is None:
+            return line
+        end = line.cell_length if span[1] == -1 else min(span[1], line.cell_length)
+        start = min(span[0], end)
+        before, selected, after = line.divide([start, end, line.cell_length])
+        # Only the selection's background: its text color is usually "transparent".
+        style = Style(bgcolor=self.selection_style.bgcolor)
+        selected = Strip(Segment.apply_style(selected, post_style=style), selected.cell_length)
+        return Strip.join([before, selected, after])
+
+    def get_selection(self, selection: Selection) -> tuple[str, str]:
+        lines = [self.render_line(y).text.rstrip() for y in range(self.size.height)]
+        return selection.extract("\n".join(lines)), "\n"
 
 
 class IssueList(Widget):
@@ -103,7 +139,7 @@ class IssueList(Widget):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Search number, title, assignee, label", id="search")
-        yield DataTable(cursor_type="row")
+        yield IssueTable(cursor_type="row")
         yield Static(id="filters")
         yield Static("Refreshing…", id="refreshing")
 
@@ -198,7 +234,7 @@ class IssueList(Widget):
 
     def header(self, group: Group) -> str:
         """A group's header row; a tab may add to it."""
-        return f"{'▸ ' if group.folded else ''}{group.name} ({group.total})"
+        return f"{f'{FOLDED} ' if group.folded else ''}{group.name} ({group.total})"
 
     def _cells(self, row: Row) -> tuple[str, ...]:
         issue = row.issue
@@ -207,7 +243,7 @@ class IssueList(Widget):
         ref = "".join(
             [
                 f"{'  ' * (row.depth - 1)}└ " if row.depth else "",
-                "▸ " if row.folded else "",
+                f"{FOLDED} " if row.folded else f"{UNFOLDED} " if row.has_sub_issues else "",
                 f"{row.lead} → " if row.lead else "",
                 issue.ref,
                 " ⚠" if status.ambiguous else "",
@@ -233,6 +269,27 @@ class IssueList(Widget):
         line = self.query_one("#filters", Static)
         line.update("  ·  ".join(p for p in parts if p))
         line.display = any(parts)
+
+    def on_click(self, event: events.Click) -> None:
+        """A click on a row selects it, and on the selected row opens it. A click on a group
+        header, or on a parent's fold arrow, folds or unfolds it."""
+        table = self.query_one(DataTable)
+        at = event.style.meta.get("row", -1)
+        if table.text_selection is not None or not 0 <= at < len(self._rows):
+            return  # the release of a drag that selected text, or not on a listed row
+        event.stop()
+        again = at == table.cursor_row
+        table.move_cursor(row=at)
+        if self._rows[at][1] is None or self._on_fold_arrow(table, event):
+            self.action_fold()
+        elif again:
+            table.action_select_cursor()
+
+    def _on_fold_arrow(self, table: DataTable, click: events.Click) -> bool:
+        widget, at = self.screen.get_widget_and_offset_at(click.screen_x, click.screen_y)
+        if widget is not table or at is None:
+            return False
+        return table.render_line(at.y).text[at.x : at.x + 1] in (FOLDED, UNFOLDED)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:

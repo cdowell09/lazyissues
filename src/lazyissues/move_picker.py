@@ -10,6 +10,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 
+from lazyissues.menu import Menu
 from lazyissues.models import CloseReason, Issue
 from lazyissues.move_planner import Close, MoveTo, Target, duplicate_key
 from lazyissues.statuses import normalize
@@ -56,7 +57,7 @@ class MovePicker(ModalScreen[Target | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
             yield Static(Text(f"Move {self.issue.ref}"), classes="title")
-            yield OptionList(*(self._prompt(target) for target in self.targets))
+            yield Menu(*(self._prompt(target) for target in self.targets))
             yield Input(placeholder="Duplicate of: 12, repo#12 or owner/repo#12", id="duplicate")
             yield Static("Enter moves · Esc cancels", id="hint")
 

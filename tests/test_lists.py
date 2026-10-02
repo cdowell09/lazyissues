@@ -39,7 +39,7 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
             "octo-dev (5)",  # the viewer, though not on the roster; two active issues
             "lanternfish#4",
             "tidepool#12",
-            "lanternfish#9",
+            "▾ lanternfish#9",  # a parent, unfolded
             "└ lanternfish#11",  # a sub-issue under its parent
             "tidepool#15 ⚠",
             "sam-reef (2)",  # one active issue
