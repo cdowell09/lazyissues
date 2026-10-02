@@ -1,7 +1,9 @@
 """Preferences (`S`) and keybinding help (`?`)."""
 
+import asyncio
 from dataclasses import replace
 
+from textual import events
 from textual.pilot import Pilot
 from textual.widgets import (
     Checkbox,
@@ -26,7 +28,7 @@ from lazyissues.status_list import StatusList
 
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
 
 def active_tab(app: LazyIssuesApp) -> str:
@@ -191,6 +193,27 @@ async def test_cancelling_preferences_reverts_the_previewed_theme_and_keeps_conf
         assert app.theme == "textual-dark"
         assert app.config == demo.config()
         assert path.read_text() == saved
+
+
+async def test_a_theme_highlighted_before_preferences_finish_mounting_stays(monkeypatch):
+    """On a slow machine `S` is handled late and the screen mounts slowly, so the theme
+    highlight can move before the screen has mounted. Mounting mustn't put it back."""
+    mount = PreferencesScreen.on_mount
+
+    async def slow_mount(screen: PreferencesScreen) -> None:
+        await asyncio.sleep(0.2)
+        mount(screen)
+
+    monkeypatch.setattr(PreferencesScreen, "on_mount", slow_mount)
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(100, 60)) as pilot:
+        await settled(pilot)
+        app.post_message(events.Key("S", "S"))  # handled during the pause, not before it
+        await pilot.pause()
+        assert isinstance(app.screen, PreferencesScreen)
+        assert not app.screen.is_mounted
+        await highlight_theme(pilot, "nord")
+        assert app.theme == "nord"
 
 
 async def test_preferences_that_cannot_be_written_still_apply_and_say_so(tmp_path):

@@ -11,7 +11,7 @@ from lazyissues.detail import IssueDetailScreen
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     """The first cell of every row: group headers and issue refs."""
     table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
 
 async def open_tab(pilot: Pilot, view: str) -> None:
@@ -151,7 +151,7 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
             "tidepool#15 ⚠",
         ]
         table = app.query_one("#team DataTable", DataTable)
-        assert str(table.get_row_at(table.cursor_row)[0]) == "▸ lanternfish#9"
+        assert str(table.get_row_at(table.cursor_row)[1]) == "▸ lanternfish#9"
 
         await pilot.press("z")  # on the parent unfolds it
         assert firsts(app, "team")[4] == "└ lanternfish#11"

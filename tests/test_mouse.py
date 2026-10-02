@@ -42,10 +42,10 @@ def table(app: App, view: str = "my-work") -> DataTable:
 
 
 def first_cell(app: App, row: int, view: str = "my-work") -> str:
-    return str(table(app, view).get_row_at(row)[0])
+    return str(table(app, view).get_row_at(row)[1])
 
 
-# Each row starts with its checkbox (the table's row label: "☐" between paddings); a cell's
+# Each row starts with its checkbox (the first column: "☐" between paddings); a cell's
 # text starts one column into the cell, after its padding.
 ISSUE_TEXT = 4
 
@@ -81,6 +81,15 @@ async def wheel(pilot: Pilot, widget: Widget, notches: int = 3) -> None:
     middle = (widget.size.width // 2, widget.size.height // 2)
     for _ in range(notches):
         await terminal(pilot, events.MouseScrollDown, widget, middle)
+
+
+async def quick_click(pilot: Pilot, widget: Widget) -> None:
+    """Click `widget` as a terminal sends a quick click: the press and release together,
+    so the app handles the release before anything the press set off."""
+    x, y = widget.region.offset
+    for event in (events.MouseDown, events.MouseUp):
+        pilot.app.post_message(event(None, x, y, 0, 0, 1, False, False, False, x, y))
+    await pilot.pause()
 
 
 async def drag(pilot: Pilot, widget: Widget, start: tuple[int, int], end: tuple[int, int]) -> None:
@@ -253,9 +262,11 @@ async def test_the_footer_offers_copy_while_text_is_selected():
         title = detail.query_one("#detail .title")
         ref = detail.issue.ref
         await drag(pilot, title, (0, 0), (len(ref) - 1, 0))
+        await until(pilot, lambda: copy_key(app) is not None)  # the footer redraws on a refresh
         key = copy_key(app)
         assert key is not None
-        await pilot.click(key)
+        await quick_click(pilot, key)
+        await until(pilot, lambda: bool(copied))  # Copy presses ctrl+c, a message later
         assert copied == [ref]
 
 
@@ -370,8 +381,7 @@ async def test_forms_take_clicks_and_copy_selected_text():
 
         label = form.query_one("Label")
         await drag(pilot, label, (0, 0), (8, 0))  # "Assignees"
-        await pilot.pause()
-        assert copy_key(app) is not None
+        await until(pilot, lambda: copy_key(app) is not None)  # the footer redraws on a refresh
         await pilot.press("ctrl+c")
         assert copied == ["Assignees"]
 

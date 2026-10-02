@@ -46,7 +46,7 @@ def results(app: LazyIssuesApp) -> FilterResults:
 def firsts(app: LazyIssuesApp) -> list[str]:
     """The first cell of every row of the shown results: group headers and issue refs."""
     table = results(app).query_one(DataTable)
-    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
 
 async def settled(pilot: Pilot) -> None:
@@ -138,7 +138,7 @@ async def test_an_invalid_query_shows_githubs_error_and_the_app_carries_on():
         toasts = [str(toast.render()) for toast in app.screen.query("Toast")]
         assert any("Invalid search query" in text for text in toasts)
         # With nothing loaded, the error stays in the list once the toast goes.
-        message = str(results(app).query_one(DataTable).get_row_at(0)[1])
+        message = str(results(app).query_one(DataTable).get_row_at(0)[2])
         assert "Invalid search query" in message
         assert app.is_running
 

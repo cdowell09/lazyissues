@@ -58,7 +58,7 @@ def groups(app: LazyIssuesApp) -> dict[str, list[str]]:
     group: list[str] = []
     for row in table(app).ordered_rows:
         if row.key.value is None:
-            header = str(table(app).get_row(row.key)[0])
+            header = str(table(app).get_row(row.key)[1])
             group = shown.setdefault(header.rsplit(" (", 1)[0], [])
         else:
             group.append(row.key.value)
@@ -66,7 +66,7 @@ def groups(app: LazyIssuesApp) -> dict[str, list[str]]:
 
 
 def cell(app: LazyIssuesApp, key: str) -> str:
-    return str(table(app).get_row(key)[0])
+    return str(table(app).get_row(key)[1])
 
 
 async def ready(pilot: Pilot) -> None:
