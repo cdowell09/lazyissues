@@ -223,4 +223,4 @@ def test_pinned_milestones_limit_and_order_the_milestones_ignoring_case():
 def test_progress_bar_fills_with_the_share_of_done_issues():
     assert progress_bar(3, 8) == "████░░░░░░ 3/8"
     assert progress_bar(0, 0) == "░░░░░░░░░░ 0/0"
-    assert progress_bar(5, 5, width=4) == "████ 5/5"
+    assert progress_bar(5, 5) == "██████████ 5/5"

@@ -38,8 +38,8 @@ class Milestones(IssueList):
         return by_milestone(self.rules, shown)
 
     def header(self, group: Group) -> str:
-        if self.found is None:
+        milestone = next((m for m in self.found or [] if m.name == group.name), None)
+        if milestone is None:  # a snapshot's milestone, until GitHub gives its progress
             return super().header(group)
-        milestone = next(m for m in self.milestones if m.name == group.name)
         done = milestone.closed
         return f"{super().header(group)}  {progress_bar(done, milestone.open + done)}"

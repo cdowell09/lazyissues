@@ -124,9 +124,9 @@ def pinned(milestones: list[Milestone], keys: list[str]) -> list[Milestone]:
     return [by_key[key.casefold()] for key in keys if key.casefold() in by_key]
 
 
-def progress_bar(done: int, total: int, width: int = 10) -> str:
-    filled = round(width * done / total) if total else 0
-    return f"{'█' * filled}{'░' * (width - filled)} {done}/{total}"
+def progress_bar(done: int, total: int) -> str:
+    filled = round(10 * done / total) if total else 0
+    return f"{'█' * filled}{'░' * (10 - filled)} {done}/{total}"
 
 
 def visible_groups(
