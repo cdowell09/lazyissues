@@ -8,6 +8,8 @@ From an up-to-date `main` with CI green, for version `X.Y.Z`:
 
 ```bash
 # 1. Set version = "X.Y.Z" in pyproject.toml, then refresh the lockfile
+#    (first release only: also drop the pre-release notes from the README's
+#    Status and Install sections, since the README becomes the PyPI page)
 uv lock
 
 # 2. Commit the bump on its own
@@ -23,15 +25,16 @@ git push origin vX.Y.Z
 
 ## What the workflow does
 
-1. **build**: checks that the tag is `v` plus `project.version` and fails otherwise, then runs `uv build` and keeps the sdist and wheel from `dist/` as an artifact.
-2. **publish**: uploads `dist/` to PyPI through trusted publishing, in the `pypi` environment. No API token is stored anywhere.
-3. **github-release**: creates the GitHub Release for the tag with generated notes and attaches `dist/*`.
+1. **ci**: runs the checks from [`ci.yml`](../.github/workflows/ci.yml) on the tagged commit, so a failing commit never publishes.
+2. **build**: checks that the tag is `v` plus `project.version` and fails otherwise, then runs `uv build` and keeps the sdist and wheel from `dist/` as an artifact.
+3. **publish**: uploads `dist/` to PyPI through trusted publishing, in the `pypi` environment. No API token is stored anywhere.
+4. **github-release**: creates the GitHub Release for the tag with generated notes and attaches `dist/*`.
 
 Each job waits for the one before it, so a failed publish leaves no GitHub Release behind.
 
 ## If a release fails
 
-- **Tag does not match the version**: delete the tag (`git push --delete origin vX.Y.Z` and `git tag -d vX.Y.Z`), fix the version, and tag again.
+- **ci or build failed** (including a tag that does not match the version): nothing was published. Delete the tag (`git push --delete origin vX.Y.Z` and `git tag -d vX.Y.Z`), fix it on `main`, and tag again.
 - **publish failed**: fix the cause (usually the trusted publisher below) and re-run the failed jobs from the workflow run page.
 - PyPI never accepts the same version twice. Once `X.Y.Z` is on PyPI, a fix ships as a new version.
 
