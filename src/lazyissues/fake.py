@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from lazyissues.github import GitHubError
-from lazyissues.models import CloseReason, Issue, IssueDetail, Project, parse_key
+from lazyissues.models import CloseReason, Issue, IssueDetail, Milestone, Project, parse_key
 from lazyissues.statuses import normalize
 
 
@@ -25,6 +25,8 @@ class FakeGitHub:
     read_only: set[str] = field(default_factory=set)  # repos that reject every write
     # (project, issue key) for each issue on a project, Status set or not.
     project_items: set[tuple[str, str]] = field(default_factory=set)
+    # Open milestones' titles, by repo; their issue counts come from `issues`.
+    milestones: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -142,6 +144,9 @@ class FakeGitHub:
                 case "label":
                     if value not in issue.labels:
                         return False
+                case "milestone":
+                    if issue.milestone != value:
+                        return False
                 case _:
                     if term.lower() not in issue.title.lower():
                         return False
@@ -156,9 +161,23 @@ class FakeGitHub:
     async def repo_projects(self, repo: str) -> list[Project]:
         return self.projects.get(self._resolve(repo), [])
 
+    async def repo_milestones(self, repo: str) -> list[Milestone]:
+        repo = self._resolve(repo)
+        milestones = []
+        for title in self.milestones.get(repo, []):
+            keys = [i.key for i in self.issues if (i.repo, i.milestone) == (repo, title)]
+            closed = sum(key in self.closed for key in keys)
+            milestones.append(Milestone(repo, title, len(keys) - closed, closed))
+        return milestones
+
     def _resolve(self, repo: str) -> str:
         """The repo's own name: GitHub matches names ignoring case."""
-        known = {*self.labels, *self.projects, *(issue.repo for issue in self.issues)}
+        known = {
+            *self.labels,
+            *self.projects,
+            *self.milestones,
+            *(issue.repo for issue in self.issues),
+        }
         for name in known:
             if name.casefold() == repo.casefold():
                 return name

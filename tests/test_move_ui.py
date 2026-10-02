@@ -149,7 +149,7 @@ async def test_a_move_shows_as_pending_until_github_confirms_it():
         rules = StatusRules(demo.config())
         stores = [view.store for view in app.query(IssueList)]
         holding = [s for s in stores if any(i.key == TIDE_12 for i in s.issues)]
-        assert len(holding) == 2  # My Work and Team
+        assert len(holding) == 3  # My Work, Team and Milestones
         for store in holding:
             [moved] = [i for i in store.issues if i.key == TIDE_12]
             assert rules.status_of(moved).name == "In Review"

@@ -10,6 +10,7 @@ VIEWER = "octo-dev"
 TEAM = ["sam-reef", "mo-kelp"]  # the viewer isn't listed; Team adds them
 REPOS = ["octo-dev/tidepool", "octo-dev/lanternfish"]
 PROJECT = "octo-dev/3"  # lanternfish's status source; tidepool uses status labels
+COUNTING = "octo-dev/lanternfish#9"  # a parent issue
 
 
 def _issue(
@@ -20,6 +21,8 @@ def _issue(
     labels: tuple[str, ...] = (),
     project_status: str | None = None,
     closed_days_ago: int | None = None,
+    milestone: str | None = None,
+    parent: str | None = None,
 ):
     closed_at = None
     if closed_days_ago is not None:
@@ -34,6 +37,8 @@ def _issue(
         project_statuses={PROJECT: project_status} if project_status else {},
         closed=closed_at is not None,
         closed_at=closed_at,
+        milestone=milestone,
+        parent=parent,
     )
 
 
@@ -52,6 +57,7 @@ def config() -> Config:
 
 def github() -> FakeGitHub:
     tide, lantern = REPOS
+    v04, v10 = "v0.4", "v1.0"  # both repos have a v1.0; they are different milestones
     issues = [
         _issue(
             tide,
@@ -59,6 +65,7 @@ def github() -> FakeGitHub:
             "Sync stalls when the tide table is empty",
             VIEWER,
             labels=("bug", "in-progress"),
+            milestone=v04,
         ),
         _issue(
             tide,
@@ -66,8 +73,9 @@ def github() -> FakeGitHub:
             "Add a weekly digest of high tides",
             VIEWER,
             labels=("enhancement", "todo", "in-review"),  # two status labels
+            milestone=v04,
         ),
-        _issue(tide, 18, "Document the import format", labels=("documentation",)),
+        _issue(tide, 18, "Document the import format", labels=("documentation",), milestone=v10),
         _issue(
             lantern,
             4,
@@ -75,13 +83,32 @@ def github() -> FakeGitHub:
             VIEWER,
             "sam-reef",
             project_status="In Progress",
+            milestone=v10,
         ),
-        _issue(lantern, 7, "Cache fish sightings between runs", "sam-reef", project_status="Todo"),
-        _issue(lantern, 9, "Count lanterns per reef", VIEWER),  # not on the project
-        _issue(lantern, 11, "Wait for the depth sensor API", VIEWER, project_status="Blocked"),
+        _issue(
+            lantern,
+            7,
+            "Cache fish sightings between runs",
+            "sam-reef",
+            project_status="Todo",
+            milestone=v10,
+            parent=COUNTING,
+        ),
+        _issue(lantern, 9, "Count lanterns per reef", VIEWER, milestone=v10),  # not on the project
+        _issue(
+            lantern,
+            11,
+            "Wait for the depth sensor API",
+            VIEWER,
+            project_status="Blocked",
+            milestone=v10,
+            parent=COUNTING,
+        ),
         _issue(lantern, 13, "Pick a palette for night dives", project_status="Todo"),
-        _issue(tide, 10, "Tide chart renders upside down", VIEWER, closed_days_ago=2),
-        _issue(lantern, 2, "Import the old lantern log", VIEWER, closed_days_ago=40),
+        _issue(
+            tide, 10, "Tide chart renders upside down", VIEWER, closed_days_ago=2, milestone=v04
+        ),
+        _issue(lantern, 2, "Import the old lantern log", VIEWER, closed_days_ago=40, milestone=v10),
     ]
     board = Project(PROJECT, "Lanternfish board", ("Todo", "In Progress", "Blocked", "Done"))
     return FakeGitHub(
@@ -93,6 +120,7 @@ def github() -> FakeGitHub:
             lantern: ["bug", "needs-triage", "ready-for-human"],
         },
         projects={lantern: [board]},
+        milestones={tide: [v04, v10], lantern: [v10]},
     )
 
 
@@ -106,7 +134,6 @@ def _details(issues: list[Issue]) -> dict[str, IssueDetail]:
     theme = "Night mode"
     sync_bug = IssueDetail(
         tide12,
-        milestone="v0.4",
         body=(
             "Syncing hangs forever when the station returns an empty tide table.\n\n"
             "**Steps**\n\n"

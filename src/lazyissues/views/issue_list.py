@@ -1,8 +1,9 @@
 """The grouped issue list every list tab is built on.
 
 A tab subclasses `IssueList` and supplies only its search (`QUERY`, or `queries` when
-it needs a lookup first) and its `grouping`. The list owns the tab's issue store and
-view state, and draws whatever `view_model.visible_groups` returns.
+it needs a lookup first) and its `grouping`, and may add to a group's `header`. The list
+owns the tab's issue store and view state, and draws whatever
+`view_model.visible_groups` returns.
 """
 
 import asyncio
@@ -27,7 +28,9 @@ from lazyissues.mover import Mover
 from lazyissues.statuses import DONE, StatusRules
 from lazyissues.store import IssueStore
 from lazyissues.view_model import (
+    Group,
     Grouping,
+    Row,
     ViewState,
     by_status,
     focusable_statuses,
@@ -81,13 +84,13 @@ class IssueList(Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.rules = StatusRules(config)
-        # Each table row's group, and its issue (None for a header or the empty message).
-        self._rows: list[tuple[str, Issue | None]] = []
+        # Each table row's group, and its issue's row (None for a header or the empty message).
+        self._rows: list[tuple[str, Row | None]] = []
 
     @property
     def issues(self) -> list[Issue]:
         """The listed issues in row order, without group headers."""
-        return [issue for _, issue in self._rows if issue is not None]
+        return [row.issue for _, row in self._rows if row is not None]
 
     async def queries(self) -> list[str]:
         """The searches whose results this tab lists, merged."""
@@ -160,14 +163,14 @@ class IssueList(Widget):
         self._rows = []
         groups = visible_groups(self.store.issues, self.grouping(), self.rules, self.state)
         for group in groups:
-            header = f"{'▸ ' if group.folded else ''}{group.name} ({group.total})"
-            table.add_row(Text(header, style="bold"), *[""] * (len(COLUMNS) - 1))
+            table.add_row(Text(self.header(group), style="bold"), *[""] * (len(COLUMNS) - 1))
             self._rows.append((group.name, None))
-            for issue in group.rows:
+            for listed in group.rows:
                 # Team lists a shared issue under each assignee; row keys must be unique.
-                key = issue.key if issue.key not in table.rows else f"{group.name}/{issue.key}"
-                table.add_row(*self._cells(issue), key=key)
-                self._rows.append((group.name, issue))
+                key = listed.issue.key
+                key = key if key not in table.rows else f"{group.name}/{key}"
+                table.add_row(*self._cells(listed), key=key)
+                self._rows.append((group.name, listed))
         if not groups:
             message = "No issues match." if self.state.filtering else self.EMPTY
             table.add_row("", message, *[""] * (len(COLUMNS) - 2))
@@ -176,11 +179,26 @@ class IssueList(Widget):
         table.move_cursor(row=row)
         self._show_filters()
 
-    def _cells(self, issue: Issue) -> tuple[str, ...]:
+    def header(self, group: Group) -> str:
+        """A group's header row; a tab may add to it."""
+        return f"{'▸ ' if group.folded else ''}{group.name} ({group.total})"
+
+    def _cells(self, row: Row) -> tuple[str, ...]:
+        issue = row.issue
         status = self.rules.status_of(issue)
         pending = self.store.moves.pending(issue.key)
+        ref = "".join(
+            [
+                f"{'  ' * (row.depth - 1)}└ " if row.depth else "",
+                "▸ " if row.folded else "",
+                f"{row.lead} → " if row.lead else "",
+                issue.ref,
+                " ⚠" if status.ambiguous else "",
+                f" ⋯ {pending}" if pending else "",
+            ]
+        )
         return (
-            issue.ref + (" ⚠" if status.ambiguous else "") + (f" ⋯ {pending}" if pending else ""),
+            ref,
             issue.title,
             status.name,
             ", ".join(issue.assignees),
@@ -198,10 +216,6 @@ class IssueList(Widget):
         line = self.query_one("#filters", Static)
         line.update("  ·  ".join(p for p in parts if p))
         line.display = any(parts)
-
-    def _cursor_group(self) -> str | None:
-        row = self.query_one(DataTable).cursor_row
-        return self._rows[row][0] if 0 <= row < len(self._rows) else None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:
@@ -225,8 +239,9 @@ class IssueList(Widget):
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""
-        row = self.query_one(DataTable).cursor_row
-        return self._rows[row][1] if 0 <= row < len(self._rows) else None
+        at = self.query_one(DataTable).cursor_row
+        row = self._rows[at][1] if 0 <= at < len(self._rows) else None
+        return row.issue if row else None
 
     def action_move(self) -> None:
         if issue := self.selected():
@@ -268,9 +283,20 @@ class IssueList(Widget):
             self.reload()
 
     def action_fold(self) -> None:
-        if (group := self._cursor_group()) is not None:
-            self.state = self.state.toggle_fold(group)
-            self.query_one(DataTable).move_cursor(row=self._rows.index((group, None)))
+        """Fold the parent of the issue under the cursor, or else its group."""
+        cursor = self.query_one(DataTable).cursor_row
+        if not 0 <= cursor < len(self._rows):
+            return
+        group, row = self._rows[cursor]
+        name = (row.fold_key if row else None) or group
+        self.state = self.state.toggle_fold(name)
+        # The cursor lands on what folded: the group's header or the parent's row.
+        at = next(
+            at
+            for at, (in_group, row) in enumerate(self._rows)
+            if in_group == group and (row.issue.key if row else in_group) == name
+        )
+        self.query_one(DataTable).move_cursor(row=at)
 
     def action_fold_all(self) -> None:
         self.state = self.state.fold_all(list(dict.fromkeys(group for group, _ in self._rows)))

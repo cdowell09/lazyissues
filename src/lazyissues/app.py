@@ -14,6 +14,7 @@ from lazyissues.mover import Mover
 from lazyissues.statuses import StatusRules
 from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views.issue_list import IssueList
+from lazyissues.views.milestones import Milestones
 from lazyissues.views.my_work import MyWork
 from lazyissues.views.team import Team
 from lazyissues.views.unassigned import Unassigned
@@ -51,7 +52,7 @@ class LazyIssuesApp(App[None]):
         return [
             view(MyWork, "my-work"),
             view(Team, "team"),
-            ("Milestones", Static("Coming soon.")),
+            view(Milestones, "milestones"),
             view(Unassigned, "unassigned"),
             ("Filters", Static("Coming soon.")),
         ]

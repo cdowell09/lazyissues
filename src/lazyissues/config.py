@@ -43,6 +43,8 @@ class Config:
     team: list[str] = field(default_factory=list)  # GitHub logins in the team roster
     filters: list[SavedFilter] = field(default_factory=list)
     done_window_days: int = 14  # how far back shown done issues reach
+    # "owner/repo/title" of the milestones the Milestones tab shows, in order; empty: all.
+    pinned_milestones: list[str] = field(default_factory=list)
 
     @property
     def repo_names(self) -> list[str]:
@@ -78,13 +80,26 @@ def load(path: Path) -> Config:
     done_window_days = doc.get("done_window_days", Config.done_window_days)
     if type(done_window_days) is not int or done_window_days < 1:
         raise ConfigError(f"{path}: `done_window_days` must be a whole number of days, 1 or more.")
+    pinned = doc.get("pinned_milestones", [])
+    if not isinstance(pinned, list) or not all(map(_is_milestone_key, pinned)):
+        raise ConfigError(
+            f'{path}: `pinned_milestones` must list milestones as "owner/repo/title",'
+            ' like `pinned_milestones = ["octo/app/v1.0"]`.'
+        )
     return Config(
         repos=[_repo(path, entry) for entry in repos],
         statuses=[_status(path, entry) for entry in doc.get("statuses", [])],
         team=team,
         filters=[_filter(path, entry) for entry in doc.get("filters", [])],
         done_window_days=done_window_days,
+        pinned_milestones=pinned,
     )
+
+
+def _is_milestone_key(key: Any) -> bool:
+    """`owner/repo/title`; the title may itself hold `/`."""
+    parts = key.split("/", 2) if isinstance(key, str) else []
+    return len(parts) == 3 and all(parts)
 
 
 def _repo(path: Path, entry: Any) -> Repo:
@@ -127,10 +142,8 @@ def save(config: Config, path: Path) -> None:
         doc.add(tomlkit.comment("lazyissues config. Comments you add here are kept."))
     except TOMLKitError as e:
         raise ConfigError(f"{path} is not valid TOML: {e}") from None
-    if not config.team:
-        doc.pop("team", None)
-    elif doc.get("team") != config.team:
-        doc["team"] = config.team
+    _set_list(doc, "team", config.team)
+    _set_list(doc, "pinned_milestones", config.pinned_milestones)
     _set_tables(doc, "repos", config.repos)
     _set_tables(doc, "statuses", config.statuses)
     _set_tables(doc, "filters", config.filters)
@@ -142,6 +155,14 @@ def save(config: Config, path: Path) -> None:
     except OSError:
         partial.unlink(missing_ok=True)
         raise
+
+
+def _set_list(doc: tomlkit.TOMLDocument, key: str, values: list[str]) -> None:
+    """Set a top-level list, left out when empty; an unchanged one keeps its formatting."""
+    if not values:
+        doc.pop(key, None)
+    elif doc.get(key) != values:
+        doc[key] = values
 
 
 def _set_tables(doc: tomlkit.TOMLDocument, key: str, records: list[Any]) -> None:

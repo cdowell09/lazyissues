@@ -16,6 +16,8 @@ class Issue:
     labels: tuple[str, ...] = ()
     closed: bool = False
     closed_at: str | None = None  # ISO 8601, as GitHub sends it; None while open
+    milestone: str | None = None  # its milestone's title
+    parent: str | None = None  # its parent issue's key, when it is a sub-issue
     # The issue's Status on each project it is on, keyed by project "owner/number".
     project_statuses: dict[str, str] = field(default_factory=dict, hash=False)
 
@@ -26,7 +28,16 @@ class Issue:
     @property
     def ref(self) -> str:
         """Short form shown in lists: `name#number`."""
-        return f"{self.repo.split('/', 1)[1]}#{self.number}"
+        return _ref(self.key)
+
+    @property
+    def parent_ref(self) -> str | None:
+        return self.parent and _ref(self.parent)
+
+
+def _ref(key: str) -> str:
+    """An issue key without its owner: `name#number`."""
+    return key.split("/", 1)[1]
 
 
 class CloseReason(StrEnum):
@@ -85,7 +96,6 @@ class IssueDetail:
     """An issue's fields, body, hierarchy, project fields and activity, oldest first."""
 
     issue: Issue
-    milestone: str | None = None
     body: str = ""
     parent: Issue | None = None
     sub_issues: tuple[Issue, ...] = ()
@@ -95,6 +105,26 @@ class IssueDetail:
     @property
     def comments(self) -> tuple[Event, ...]:
         return tuple(event for event in self.activity if event.kind == "commented")
+
+
+@dataclass(frozen=True)
+class Milestone:
+    """A milestone in one repo; same-titled milestones in different repos are different."""
+
+    repo: str  # "owner/name"
+    title: str
+    open: int = 0  # how many of its issues are open
+    closed: int = 0  # how many are done
+
+    @property
+    def key(self) -> str:
+        """`owner/name/title`, as config's `pinned_milestones` lists it."""
+        return f"{self.repo}/{self.title}"
+
+    @property
+    def name(self) -> str:
+        """Shown as `name / title`."""
+        return f"{self.repo.split('/', 1)[1]} / {self.title}"
 
 
 @dataclass(frozen=True)

@@ -29,7 +29,10 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 
 - **My Work**: your open issues, by status
 - **Team**: open issues by assignee, for everyone in `team` plus you, the busiest (most issues in an active status) first; within a person, active issues come first and done ones last
+- **Milestones**: each repo's open milestones as `repo / title`, with a bar of done (closed) issues out of all of them; under each, its open issues by status. Same-named milestones in different repos stay separate. Set `pinned_milestones` to show only those, in that order
 - **Unassigned**: open issues with no assignee, by status
+
+In every tab, a sub-issue whose parent is in the same group is indented under it (`└ lanternfish#7`); otherwise its row leads with the parent (`lanternfish#9 → lanternfish#7`). `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
 
 ## Statuses
 
@@ -63,7 +66,7 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `/` | lists | search by number, title, assignee or label (and team member in Team); `Enter` keeps it, `Esc` clears it |
 | `f` `F` | lists | focus the next or previous status, then back to all |
 | `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
-| `z` `Z` | lists | fold the group under the cursor, or fold and unfold every group |
+| `z` `Z` | lists | fold the sub-issues of the parent under the cursor (or of the sub-issue's parent), else the group; or fold and unfold every group |
 | `R` | lists | show one repo at a time, then all |
 | `m` | lists, detail | move the issue: pick a status, a close reason, or reopen |
 | a status's `key` | lists, detail | open the move picker on that status; the uppercase key moves at once |
@@ -126,6 +129,7 @@ Setup also puts you on the team roster and adds two saved filters, "Ready for me
 ```toml
 team = ["octo-dev", "sam-reef"]     # GitHub logins in the Team tab
 done_window_days = 14               # how far back `d` reaches for closed issues; the default
+pinned_milestones = ["octo-dev/lanternfish/v1.0"]  # owner/repo/title; Milestones shows only these
 
 [[repos]]                           # at least one
 name = "octo-dev/tidepool"

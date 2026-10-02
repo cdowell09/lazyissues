@@ -28,7 +28,7 @@ async def test_my_work_groups_my_open_issues_by_status_across_the_repo_set():
             "In Review (1)",
             "tidepool#15 ⚠",  # two status labels
             "Blocked (1)",  # not a configured status, so after the configured ones
-            "lanternfish#11",
+            "lanternfish#9 → lanternfish#11",  # a sub-issue whose parent is in another group
         ]
         assert rows(app)[4][2:4] == ["In Progress", "octo-dev, sam-reef"]
 
