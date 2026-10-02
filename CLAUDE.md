@@ -23,6 +23,7 @@ Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platform
 - **`fake`**: `FakeGitHub`, the in-memory gateway for tests and `--demo`
 - **`demo`**: made-up config and data for `--demo`
 - **`models`**: domain records (`Issue`)
+- **`statuses`**: `StatusRules`, the only code that interprets statuses: resolves an issue's status from its repo's status source, groups issues in display order, answers done and active
 - **`search`**: scoping search queries to the repo set
 - **`config`**: `config.toml` location and loading
 
@@ -33,7 +34,7 @@ Name domain concepts with [CONTEXT.md](CONTEXT.md): Issue, Status, Status source
 ## Key Design Decisions
 
 ### Statuses
-A status is a name the user defines in config; the app ships none. Each repo's status source (labels, or one project's Status field) supplies them, matched by name ignoring case and treating `-`, `_` and spaces alike ([ADR 0001](docs/adr/0001-status-from-labels-or-project.md)). One status-rules object built from config owns display order, done-ness and active-ness; every view asks it, so sorting statuses or testing for done happens in that one place. Done is always "closed", in every source.
+A status is a name the user defines in config; the app ships none. Each repo's status source (labels, or one project's Status field) supplies them, matched by name ignoring case and treating `-`, `_` and spaces alike ([ADR 0001](docs/adr/0001-status-from-labels-or-project.md)). One status-rules object built from config (`statuses.StatusRules`) owns display order, done-ness and active-ness; every view asks it, so sorting statuses or testing for done happens in that one place. Done is always "closed", in every source.
 
 ### Moves wait for GitHub
 A move changes an issue only after GitHub confirms it; a failure keeps the old status and shows the error until dismissed. Every read carries the time it was requested, and a read requested before an issue's latest confirmed move must not overwrite its status ([ADR 0003](docs/adr/0003-confirm-moves-and-reject-stale-status.md)). Route status writes from reads through the cache-update helpers that check this.
