@@ -29,10 +29,13 @@ class StatusGroup:
 class StatusRules:
     def __init__(self, config: Config) -> None:
         self._statuses = {normalize(status.name): status for status in config.statuses}
-        self._rank = {key: rank for rank, key in enumerate(self._statuses)}
+        self._rank = {normalize(NO_STATUS): -1} | {
+            key: rank for rank, key in enumerate(self._statuses)
+        }
         self._repos = {repo.name.casefold(): repo for repo in config.repos}
 
     def status_of(self, issue: Issue) -> IssueStatus:
+        # A repo outside the repo set (a saved filter's own `repo:`) reads status labels.
         repo = self._repos.get(issue.repo.casefold(), Repo(issue.repo))
         if repo.project is not None:
             return self._project_status(issue, repo.project)
@@ -57,19 +60,15 @@ class StatusRules:
         for issue in issues:
             name = self.status_of(issue).name
             groups.setdefault(normalize(name), StatusGroup(name, [])).issues.append(issue)
-        return sorted(groups.values(), key=self._display_rank)
-
-    def _display_rank(self, group: StatusGroup) -> int:
-        if group.name == NO_STATUS:
-            return -1
-        return self._rank.get(normalize(group.name), len(self._rank))  # sorted() is stable
+        # Unknown names share the last rank; sorted() is stable, so they stay first-seen.
+        return sorted(
+            groups.values(), key=lambda g: self._rank.get(normalize(g.name), len(self._rank))
+        )
 
     def _project_status(self, issue: Issue, project: str) -> IssueStatus:
         # GitHub logins ignore case, so a hand-written `project` may differ from GitHub's.
-        option = next(
-            (v for k, v in issue.project_statuses.items() if k.casefold() == project.casefold()),
-            None,
-        )
+        statuses = {key.casefold(): value for key, value in issue.project_statuses.items()}
+        option = statuses.get(project.casefold())
         if option is None:
             return IssueStatus(NO_STATUS)
         known = self._statuses.get(normalize(option))

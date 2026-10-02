@@ -12,6 +12,10 @@ class FakeGitHub:
     issues: list[Issue] = field(default_factory=list)
     closed: set[str] = field(default_factory=set)  # issue keys
 
+    def __post_init__(self) -> None:
+        # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
+        self.closed |= {issue.key for issue in self.issues if issue.closed}
+
     async def search_issues(self, query: str) -> list[Issue]:
         return [
             replace(issue, closed=issue.key in self.closed)
