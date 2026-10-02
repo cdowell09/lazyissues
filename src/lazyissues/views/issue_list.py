@@ -45,25 +45,16 @@ COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
 
 
 class IssueTable(DataTable):
-    """The list's table, with clicks that open and text that a drag selects.
+    """The list's table, whose text a drag selects. (Textual's table has no selection.)
 
-    A click on a row selects it; a click on the selected row, or on a group header (a row
-    without a key), opens it. (Textual's table opens only on a second click on the same
-    cell, and has no text selection.)
+    Clicks are the list's to handle (`IssueList.on_click`): Textual's table opens a row
+    only on a second click on the same cell.
     """
 
     ALLOW_SELECT = True
 
     def on_click(self, event: events.Click) -> None:
-        if self.text_selection is not None:
-            event.prevent_default()  # the release of a drag that selected text
-            return
-        row = event.style.meta.get("row", -1)
-        if row >= 0 and (row == self.cursor_row or self.ordered_rows[row].key.value is None):
-            event.prevent_default()  # skip the table's own click handling
-            event.stop()
-            self.move_cursor(row=row)
-            self.action_select_cursor()
+        event.prevent_default()
 
     def render_line(self, y: int) -> Strip:
         # Offsets tell a drag which character is where; selections are in on-screen lines.
@@ -251,7 +242,7 @@ class IssueList(Widget):
         ref = "".join(
             [
                 f"{'  ' * (row.depth - 1)}└ " if row.depth else "",
-                "▸ " if row.folded else "",
+                "▸ " if row.folded else "▾ " if row.has_sub_issues else "",
                 f"{row.lead} → " if row.lead else "",
                 issue.ref,
                 " ⚠" if status.ambiguous else "",
@@ -277,6 +268,27 @@ class IssueList(Widget):
         line = self.query_one("#filters", Static)
         line.update("  ·  ".join(p for p in parts if p))
         line.display = any(parts)
+
+    def on_click(self, event: events.Click) -> None:
+        """A click on a row selects it, and on the selected row opens it. A click on a group
+        header, or on a parent's fold arrow, folds or unfolds it."""
+        table = self.query_one(DataTable)
+        at = event.style.meta.get("row", -1)
+        if table.text_selection is not None or not 0 <= at < len(self._rows):
+            return  # the release of a drag that selected text, or not on a listed row
+        event.stop()
+        again = at == table.cursor_row
+        table.move_cursor(row=at)
+        if self._rows[at][1] is None or self._on_fold_arrow(table, event):
+            self.action_fold()
+        elif again:
+            table.action_select_cursor()
+
+    def _on_fold_arrow(self, table: DataTable, click: events.Click) -> bool:
+        _, offset = self.screen.get_widget_and_offset_at(click.screen_x, click.screen_y)
+        if offset is None:
+            return False
+        return table.render_line(offset.y).text[offset.x : offset.x + 1] in ("▸", "▾")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if not 0 <= event.cursor_row < len(self._rows):

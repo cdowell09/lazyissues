@@ -119,6 +119,22 @@ async def test_clicking_a_group_header_folds_and_unfolds_it():
         assert first_cell(app, 0) == header
 
 
+async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await pilot.click(next(tab for tab in app.query(Tab) if str(tab.label) == "Team"))
+        assert first_cell(app, 3, "team") == "▾ lanternfish#9"
+        assert first_cell(app, 4, "team") == "└ lanternfish#11"
+
+        await click_row(pilot, 3, x=1, view="team")  # the arrow, after the cell's padding
+        assert first_cell(app, 3, "team") == "▸ lanternfish#9"
+        assert first_cell(app, 4, "team") == "tidepool#15 ⚠"
+        await click_row(pilot, 3, x=1, view="team")
+        assert first_cell(app, 4, "team") == "└ lanternfish#11"
+        assert not isinstance(app.screen, IssueDetailScreen)
+
+
 async def test_clicking_a_tab_shows_it_and_its_rows_are_clickable():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
@@ -173,13 +189,14 @@ async def test_the_wheel_scrolls_lists_and_details():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test(size=(80, 10)) as pilot:
         await settled(pilot)
-        assert table(app).scroll_y == 0
-        await wheel(pilot, table(app))
-        assert table(app).scroll_y > 0
-
         detail = (await open_detail(pilot)).query_one("#detail")
         await wheel(pilot, detail)
         assert detail.scroll_y > 0
+
+        await pilot.press("escape")
+        assert table(app).scroll_y == 0
+        await wheel(pilot, table(app))
+        assert table(app).scroll_y > 0
 
 
 async def test_dragging_across_detail_text_and_ctrl_c_copies_it():
