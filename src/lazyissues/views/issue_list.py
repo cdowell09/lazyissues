@@ -42,6 +42,7 @@ from lazyissues.view_model import (
 )
 
 COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
+FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
 
 
 class IssueTable(DataTable):
@@ -233,7 +234,7 @@ class IssueList(Widget):
 
     def header(self, group: Group) -> str:
         """A group's header row; a tab may add to it."""
-        return f"{'▸ ' if group.folded else ''}{group.name} ({group.total})"
+        return f"{f'{FOLDED} ' if group.folded else ''}{group.name} ({group.total})"
 
     def _cells(self, row: Row) -> tuple[str, ...]:
         issue = row.issue
@@ -242,7 +243,7 @@ class IssueList(Widget):
         ref = "".join(
             [
                 f"{'  ' * (row.depth - 1)}└ " if row.depth else "",
-                "▸ " if row.folded else "▾ " if row.has_sub_issues else "",
+                f"{FOLDED} " if row.folded else f"{UNFOLDED} " if row.has_sub_issues else "",
                 f"{row.lead} → " if row.lead else "",
                 issue.ref,
                 " ⚠" if status.ambiguous else "",
@@ -285,17 +286,14 @@ class IssueList(Widget):
             table.action_select_cursor()
 
     def _on_fold_arrow(self, table: DataTable, click: events.Click) -> bool:
-        _, offset = self.screen.get_widget_and_offset_at(click.screen_x, click.screen_y)
-        if offset is None:
+        widget, at = self.screen.get_widget_and_offset_at(click.screen_x, click.screen_y)
+        if widget is not table or at is None:
             return False
-        return table.render_line(offset.y).text[offset.x : offset.x + 1] in ("▸", "▾")
+        return table.render_line(at.y).text[at.x : at.x + 1] in (FOLDED, UNFOLDED)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if not 0 <= event.cursor_row < len(self._rows):
-            return  # the empty list's message
-        if self._rows[event.cursor_row][1] is None:
-            self.action_fold()  # a group header opens and closes
-            return
+        if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:
+            return  # a group header
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
             IssueDetailScreen(

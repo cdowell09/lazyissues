@@ -69,7 +69,7 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | Key | Where | Action |
 | --- | --- | --- |
 | `↑` `↓` | lists | select an issue |
-| `Enter` | lists | open the issue detail; on a group header, fold or unfold it |
+| `Enter` | lists | open the issue detail |
 | `/` | lists | search by number, title, assignee or label (and team member in Team); `Enter` keeps it, `Esc` clears it |
 | `f` `F` | lists | focus the next or previous status, then back to all |
 | `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
