@@ -13,6 +13,7 @@ from lazyissues import config as config_module
 from lazyissues.config import Config, ConfigError, Repo
 from lazyissues.discovery import Proposal, discover, find_repo
 from lazyissues.github import Gateway, GitHubError
+from lazyissues.status_list import StatusList
 
 BACK = Binding("escape", "app.pop_screen", "Back")
 
@@ -224,26 +225,25 @@ class SourcesScreen(_Step):
 class StatusesScreen(_Step):
     """The combined status list: its order, and which statuses are active."""
 
-    BINDINGS = [
-        BACK,
-        Binding("shift+up", "move(-1)", "Move up"),
-        Binding("shift+down", "move(1)", "Move down"),
-        Binding("ctrl+s", "save", "Save"),
-    ]
+    BINDINGS = [BACK, Binding("ctrl+s", "save", "Save")]
 
     def body(self) -> ComposeResult:
+        statuses = self.proposal.statuses
         yield Label("Statuses", classes="title")
         yield Static(
             "Groups show in this order. Check the active statuses: moving an issue to one"
             " assigns you if nobody is.",
             classes="hint",
         )
-        yield SelectionList[str]()
-        yield Static(
+        status_list = StatusList(statuses)
+        status_list.display = bool(statuses)
+        yield status_list
+        empty = Static(
             "No statuses yet. Issues show under No status until you add some to config.toml.",
-            id="empty",
             classes="hint",
         )
+        empty.display = not statuses
+        yield empty
         with Horizontal():
             yield Button("Move up", action="screen.move(-1)")
             yield Button("Move down", action="screen.move(1)")
@@ -254,30 +254,12 @@ class StatusesScreen(_Step):
             classes="hint",
         )
 
-    def on_mount(self) -> None:
-        self.show(highlight=0)
-
-    def show(self, highlight: int) -> None:
-        statuses = self.proposal.statuses
-        widget = self.query_one(SelectionList)
-        with widget.prevent(SelectionList.SelectionToggled, SelectionList.SelectedChanged):
-            widget.clear_options()
-            widget.add_options([(s.name, s.name, s.active) for s in statuses])
-        widget.highlighted = highlight if statuses else None
-        widget.display = bool(statuses)
-        self.query_one("#empty").display = not statuses
-
-    @on(SelectionList.SelectionToggled)
-    def toggle_active(self, event: SelectionList.SelectionToggled) -> None:
-        self.proposal.toggle_active(str(event.selection.value))
+    @on(StatusList.Changed)
+    def edit_statuses(self, event: StatusList.Changed) -> None:
+        self.proposal.set_statuses(event.statuses)
 
     def action_move(self, step: int) -> None:
-        widget = self.query_one(SelectionList)
-        if widget.highlighted is None:
-            return
-        name = str(widget.get_option_at_index(widget.highlighted).value)
-        self.proposal.move(name, step)
-        self.show(highlight=[s.name for s in self.proposal.statuses].index(name))
+        self.query_one(StatusList).action_move(step)
 
     def action_save(self) -> None:
         self.setup.save(self.proposal.config())

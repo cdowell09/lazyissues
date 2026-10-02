@@ -90,15 +90,16 @@ class Proposal:
         (project,) = (p for p in self.offers[repo].projects if p.ref == ref)
         return [name for name in project.status_options if not is_done_option(name)]
 
-    def move(self, name: str, step: int) -> None:
-        """Move status `name` `step` places later (earlier when negative)."""
-        names = [status.name for status in self.statuses]
-        i = names.index(name)
-        names.insert(max(0, i + step), names.pop(i))
-        self.order = names
+    def set_statuses(self, statuses: list[Status]) -> None:
+        """Take the order and active statuses the user chose from `statuses`.
 
-    def toggle_active(self, name: str) -> None:
-        self.active ^= {normalize(name)}
+        A status not listed (its source isn't chosen now) keeps whether it is active.
+        """
+        listed = {normalize(status.name) for status in statuses}
+        self.order = [status.name for status in statuses]
+        self.active = (self.active - listed) | {
+            normalize(status.name) for status in statuses if status.active
+        }
 
     def config(self) -> Config:
         if not self.repos:

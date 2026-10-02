@@ -84,6 +84,7 @@ class IssueList(Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.rules = StatusRules(config)
+        self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
         # Each table row's group, and its issue's row (None for a header or the empty message).
         self._rows: list[tuple[str, Row | None]] = []
         self.error: str | None = None  # why the latest refresh failed
@@ -119,6 +120,19 @@ class IssueList(Widget):
     def watch_state(self) -> None:
         self.show()
 
+    def configure(self, config: Config) -> None:
+        """Use `config` from now on: redraw by its statuses and refresh with its roster.
+
+        A changed done default shows or hides done issues here too.
+        """
+        show_done = config.preferences.show_done
+        if show_done != self.config.preferences.show_done:
+            self.set_reactive(IssueList.state, replace(self.state, show_done=show_done))
+        self.config = config
+        self.rules = StatusRules(config)
+        self.show()
+        self.reload()
+
     def reload(self) -> None:
         """Refresh from GitHub in the background, unless a refresh is already running."""
         if self.refreshing:
@@ -129,10 +143,10 @@ class IssueList(Widget):
     async def _load(self) -> None:
         try:
             while True:
-                with_done = self.state.show_done
+                with_done, config = self.state.show_done, self.config
                 await self.store.refresh(self._read(with_done))
-                if with_done or not self.state.show_done:
-                    break  # otherwise done was shown mid-read, so read the done issues too
+                if (with_done or not self.state.show_done) and config is self.config:
+                    break  # otherwise done was shown or the config changed mid-read; read again
         except GitHubError as e:
             self.error = f"Couldn't refresh: {e}"
             title = f"Couldn't refresh {self.LABEL}"

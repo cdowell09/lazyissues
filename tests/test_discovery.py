@@ -86,9 +86,7 @@ async def test_reordering_and_marking_active_survive_source_changes():
         projects={"o/r": [BOARD]},
     )
     proposal = await discover(github)
-    proposal.move("In Review", -2)
-    proposal.toggle_active("In Progress")
-    proposal.toggle_active("Todo")
+    proposal.set_statuses([Status("In Review"), Status("Todo", active=True), Status("In Progress")])
     assert proposal.statuses == [
         Status("In Review"),
         Status("Todo", active=True),
