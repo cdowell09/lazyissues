@@ -2,6 +2,7 @@
 
 import shlex
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail, Project
@@ -55,6 +56,9 @@ class FakeGitHub:
                 case "no" if value == "assignee":
                     if issue.assignees:
                         return False
+                case "closed" if value.startswith(">="):
+                    if issue.key not in self.closed or self._closed_on(issue) < value[2:]:
+                        return False
                 case "label":
                     if value not in issue.labels:
                         return False
@@ -79,3 +83,7 @@ class FakeGitHub:
             if name.casefold() == repo.casefold():
                 return name
         raise GitHubError(f"Could not resolve to a Repository with the name '{repo}'.")
+
+    def _closed_on(self, issue: Issue) -> str:
+        """The UTC date `closed:` compares; one closed via `closed` this session is today."""
+        return (issue.closed_at or datetime.now(UTC).isoformat())[:10]

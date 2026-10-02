@@ -1,6 +1,6 @@
 from lazyissues.config import Config, Repo, Status
 from lazyissues.models import Issue
-from lazyissues.statuses import NO_STATUS, IssueStatus, StatusRules, is_done_option
+from lazyissues.statuses import DONE, NO_STATUS, IssueStatus, StatusRules, is_done_option
 
 CONFIG = Config(
     repos=[Repo("a/labels"), Repo("a/board", "project", "a/7")],
@@ -54,6 +54,21 @@ def test_groups_show_no_status_first_then_configured_order_then_unknown_as_first
         ("In Progress", [2, 5]),
         ("Blocked", [1, 7]),
         ("Waiting", [3]),
+    ]
+
+
+def test_closed_issues_group_as_done_after_every_other_status():
+    issues = [
+        issue("a/labels", 1, labels=("in-progress",), closed=True),
+        issue("a/board", 2, project_statuses={"a/7": "Blocked"}),
+        issue("a/labels", 3, labels=("todo",)),
+    ]
+    rules = StatusRules(CONFIG)
+    assert rules.status_of(issues[0]) == IssueStatus(DONE)
+    assert [(g.name, [i.number for i in g.issues]) for g in rules.group(issues)] == [
+        ("Todo", [3]),
+        ("Blocked", [2]),
+        (DONE, [1]),
     ]
 
 

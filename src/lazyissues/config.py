@@ -42,6 +42,7 @@ class Config:
     statuses: list[Status]
     team: list[str] = field(default_factory=list)  # GitHub logins in the team roster
     filters: list[SavedFilter] = field(default_factory=list)
+    done_window_days: int = 14  # how far back shown done issues reach
 
     @property
     def repo_names(self) -> list[str]:
@@ -74,11 +75,15 @@ def load(path: Path) -> Config:
     team = doc.get("team", [])
     if not isinstance(team, list) or not all(isinstance(login, str) for login in team):
         raise ConfigError(f'{path}: `team` must be a list of GitHub logins, like `team = ["me"]`.')
+    done_window_days = doc.get("done_window_days", Config.done_window_days)
+    if type(done_window_days) is not int or done_window_days < 1:
+        raise ConfigError(f"{path}: `done_window_days` must be a whole number of days, 1 or more.")
     return Config(
         repos=[_repo(path, entry) for entry in repos],
         statuses=[_status(path, entry) for entry in doc.get("statuses", [])],
         team=team,
         filters=[_filter(path, entry) for entry in doc.get("filters", [])],
+        done_window_days=done_window_days,
     )
 
 

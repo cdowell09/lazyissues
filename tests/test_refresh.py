@@ -11,7 +11,7 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail
-from lazyissues.store import IssueStore
+from lazyissues.store import IssueStore, snapshot_path
 
 MY_DEMO_ISSUES = [  # in display order, by status group
     "octo-dev/lanternfish#9",
@@ -80,12 +80,11 @@ def notifications(app: LazyIssuesApp) -> list[str]:
 
 
 async def test_a_second_launch_shows_the_snapshot_before_github_answers(tmp_path):
-    path = tmp_path / "snapshot.json"
-    first = LazyIssuesApp(demo.config(), demo.github(), IssueStore(path))
+    first = LazyIssuesApp(demo.config(), demo.github(), tmp_path)
     async with first.run_test() as pilot:
         await pilot.app.workers.wait_for_complete()
 
-    app = LazyIssuesApp(demo.config(), Gated(demo.github()), IssueStore(path))
+    app = LazyIssuesApp(demo.config(), Gated(demo.github()), tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert listed(app) == MY_DEMO_ISSUES
@@ -106,10 +105,10 @@ async def test_an_indicator_shows_while_refreshing():
 
 
 async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_path):
-    store = IssueStore(tmp_path / "snapshot.json")
+    store = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
     store.replace(await demo.github().search_issues("assignee:@me"), requested_at=0.0)
 
-    app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), store)
+    app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), tmp_path)
     async with app.run_test(notifications=True) as pilot:
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()

@@ -1,12 +1,13 @@
 """Made-up data for `--demo`. Never real accounts or repositories."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from lazyissues.config import Config, Repo, Status
 from lazyissues.fake import FakeGitHub
 from lazyissues.models import Event, Issue, IssueDetail, Project, ProjectField
 
 VIEWER = "octo-dev"
+TEAM = ["sam-reef", "mo-kelp"]  # the viewer isn't listed; Team adds them
 REPOS = ["octo-dev/tidepool", "octo-dev/lanternfish"]
 PROJECT = "octo-dev/3"  # lanternfish's status source; tidepool uses status labels
 
@@ -18,7 +19,11 @@ def _issue(
     *assignees: str,
     labels: tuple[str, ...] = (),
     project_status: str | None = None,
+    closed_days_ago: int | None = None,
 ):
+    closed_at = None
+    if closed_days_ago is not None:
+        closed_at = (datetime.now(UTC) - timedelta(days=closed_days_ago)).isoformat()
     return Issue(
         repo=repo,
         number=number,
@@ -27,6 +32,8 @@ def _issue(
         assignees=assignees,
         labels=labels,
         project_statuses={PROJECT: project_status} if project_status else {},
+        closed=closed_at is not None,
+        closed_at=closed_at,
     )
 
 
@@ -39,6 +46,7 @@ def config() -> Config:
             Status("In Progress", active=True, key="p"),
             Status("In Review"),
         ],
+        team=TEAM,
     )
 
 
@@ -71,6 +79,9 @@ def github() -> FakeGitHub:
         _issue(lantern, 7, "Cache fish sightings between runs", "sam-reef", project_status="Todo"),
         _issue(lantern, 9, "Count lanterns per reef", VIEWER),  # not on the project
         _issue(lantern, 11, "Wait for the depth sensor API", VIEWER, project_status="Blocked"),
+        _issue(lantern, 13, "Pick a palette for night dives", project_status="Todo"),
+        _issue(tide, 10, "Tide chart renders upside down", VIEWER, closed_days_ago=2),
+        _issue(lantern, 2, "Import the old lantern log", VIEWER, closed_days_ago=40),
     ]
     board = Project(PROJECT, "Lanternfish board", ("Todo", "In Progress", "Blocked", "Done"))
     return FakeGitHub(
@@ -91,7 +102,7 @@ def _at(day: int, hour: int) -> datetime:
 
 def _details(issues: list[Issue]) -> dict[str, IssueDetail]:
     """Bodies, comments, activity and hierarchy for a few issues; the rest have none."""
-    tide12, tide15, _, lantern4, lantern7, lantern9, lantern11 = issues
+    tide12, tide15, _, lantern4, lantern7, lantern9, lantern11 = issues[:7]
     theme = "Night mode"
     sync_bug = IssueDetail(
         tide12,

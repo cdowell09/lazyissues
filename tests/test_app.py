@@ -30,14 +30,14 @@ async def test_my_work_groups_my_open_issues_by_status_across_the_repo_set():
             "Blocked (1)",  # not a configured status, so after the configured ones
             "lanternfish#11",
         ]
-        assert rows(app)[4][2] == "octo-dev, sam-reef"
+        assert rows(app)[4][2:4] == ["In Progress", "octo-dev, sam-reef"]
 
 
 async def test_my_work_says_when_nothing_is_assigned():
     app = LazyIssuesApp(demo.config(), FakeGitHub(viewer="nobody"))
     async with app.run_test() as pilot:
         await pilot.app.workers.wait_for_complete()
-        assert rows(app) == [["", "No open issues are assigned to you.", "", ""]]
+        assert rows(app) == [["", "No open issues are assigned to you.", "", "", ""]]
 
 
 @pytest.fixture

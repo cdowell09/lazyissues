@@ -66,12 +66,14 @@ def test_a_read_requested_before_the_loaded_one_is_ignored(tmp_path):
     assert IssueStore(path).issues == [issue(1, "newer")]
 
 
-def test_each_repo_set_has_its_own_snapshot(tmp_path):
+def test_each_view_and_repo_set_has_its_own_snapshot(tmp_path):
     cache = tmp_path / "not-yet-created"
-    IssueStore(snapshot_path(cache, ["octo/a", "octo/b"])).replace([issue(1)], requested_at=1.0)
+    path = snapshot_path(cache, "team", ["octo/a", "octo/b"])
+    IssueStore(path).replace([issue(1)], requested_at=1.0)
 
-    assert IssueStore(snapshot_path(cache, ["octo/b", "octo/a"])).issues == [issue(1)]
-    assert IssueStore(snapshot_path(cache, ["octo/a"])).issues == []
+    assert IssueStore(snapshot_path(cache, "team", ["octo/b", "octo/a"])).issues == [issue(1)]
+    assert IssueStore(snapshot_path(cache, "team", ["octo/a"])).issues == []
+    assert IssueStore(snapshot_path(cache, "my-work", ["octo/a", "octo/b"])).issues == []
 
 
 def test_an_unwritable_cache_still_updates_the_loaded_issues(tmp_path):

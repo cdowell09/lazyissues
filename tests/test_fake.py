@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -16,8 +17,8 @@ async def test_fake_understands_the_queries_the_app_sends():
         return [issue.number for issue in await github.search_issues(query)]
 
     assert await numbers("is:issue is:open assignee:@me repo:octo-dev/tidepool") == [12]
-    assert await numbers("is:closed") == [15]
-    assert await numbers("no:assignee") == [18]
+    assert await numbers("is:closed") == [15, 10, 2]
+    assert await numbers("no:assignee") == [18, 13]
     assert await numbers("assignee:sam-reef repo:octo-dev/lanternfish") == [4, 7]
     assert await numbers('label:bug "tide table"') == [12]
     # The fake knows no authors or commenters, so involvement is assignment.
@@ -81,3 +82,27 @@ async def test_fake_rejects_unknown_repos_like_github():
 async def test_fake_matches_repo_names_ignoring_case_like_github():
     github = FakeGitHub(viewer="me", labels={"o/r": ["bug"]})
     assert await github.repo_labels("O/R") == ["bug"]
+
+
+async def test_fake_finds_issues_closed_on_or_after_a_date_like_github():
+    def closed(number: int, at: str | None) -> Issue:
+        return Issue("a/x", number, "Old", "u", closed=True, closed_at=at)
+
+    github = FakeGitHub(
+        viewer="me",
+        issues=[
+            closed(1, "2026-09-20T23:59:59Z"),
+            closed(2, "2026-09-21T00:00:00Z"),
+            Issue("a/x", 3, "Open", "u"),
+        ],
+    )
+    found = await github.search_issues("is:closed closed:>=2026-09-21")
+    assert [issue.number for issue in found] == [2]
+    assert found[0].closed_at == "2026-09-21T00:00:00Z"
+
+
+async def test_fake_counts_an_issue_closed_during_the_session_as_closed_today():
+    github = FakeGitHub(viewer="me", issues=[Issue("a/x", 1, "Open", "u")])
+    github.closed.add("a/x#1")
+    today = datetime.now(UTC).date().isoformat()
+    assert len(await github.search_issues(f"closed:>={today}")) == 1

@@ -15,17 +15,17 @@ from lazyissues.models import Issue
 
 # Bump whenever `Issue` changes shape. Snapshots store `Issue` fields as JSON, so
 # they must stay strings, numbers, booleans, None, or tuples and dicts of those.
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 
 
 def cache_dir() -> Path:
     return Path(platformdirs.user_cache_dir("lazyissues", appauthor=False))
 
 
-def snapshot_path(directory: Path, repos: list[str]) -> Path:
-    """Where the snapshot for this repo set lives; the repos' order doesn't matter."""
+def snapshot_path(directory: Path, view: str, repos: list[str]) -> Path:
+    """Where one view's snapshot for this repo set lives; the repos' order doesn't matter."""
     digest = hashlib.sha256("\n".join(sorted(repos)).encode()).hexdigest()[:16]
-    return directory / f"snapshot-{digest}.json"
+    return directory / f"snapshot-{view}-{digest}.json"
 
 
 def _issue(fields: dict[str, Any]) -> Issue:
