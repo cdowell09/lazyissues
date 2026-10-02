@@ -11,11 +11,15 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import var
+from textual.selection import Selection
+from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
@@ -38,6 +42,46 @@ from lazyissues.view_model import (
 )
 
 COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
+
+
+class IssueTable(DataTable):
+    """The list's table, with clicks that open and text that a drag selects.
+
+    A click on a row selects it; a click on the selected row, or on a group header (a row
+    without a key), opens it. (Textual's table opens only on a second click on the same
+    cell, and has no text selection.)
+    """
+
+    ALLOW_SELECT = True
+
+    def on_click(self, event: events.Click) -> None:
+        if self.text_selection is not None:
+            event.prevent_default()  # the release of a drag that selected text
+            return
+        row = event.style.meta.get("row", -1)
+        if row >= 0 and (row == self.cursor_row or self.ordered_rows[row].key.value is None):
+            event.prevent_default()  # skip the table's own click handling
+            event.stop()
+            self.move_cursor(row=row)
+            self.action_select_cursor()
+
+    def render_line(self, y: int) -> Strip:
+        # Offsets tell a drag which character is where; selections are in on-screen lines.
+        line = super().render_line(y).apply_offsets(0, y)
+        span = self.text_selection.get_span(y) if self.text_selection else None
+        if span is None:
+            return line
+        end = line.cell_length if span[1] == -1 else min(span[1], line.cell_length)
+        start = min(span[0], end)
+        before, selected, after = line.divide([start, end, line.cell_length])
+        # Only the selection's background: its text color is usually "transparent".
+        style = Style(bgcolor=self.selection_style.bgcolor)
+        selected = Strip(Segment.apply_style(selected, post_style=style), selected.cell_length)
+        return Strip.join([before, selected, after])
+
+    def get_selection(self, selection: Selection) -> tuple[str, str]:
+        lines = [self.render_line(y).text.rstrip() for y in range(self.size.height)]
+        return selection.extract("\n".join(lines)), "\n"
 
 
 class IssueList(Widget):
@@ -103,7 +147,7 @@ class IssueList(Widget):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Search number, title, assignee, label", id="search")
-        yield DataTable(cursor_type="row")
+        yield IssueTable(cursor_type="row")
         yield Static(id="filters")
         yield Static("Refreshing…", id="refreshing")
 
@@ -235,8 +279,11 @@ class IssueList(Widget):
         line.display = any(parts)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:
-            return  # a group header
+        if not 0 <= event.cursor_row < len(self._rows):
+            return  # the empty list's message
+        if self._rows[event.cursor_row][1] is None:
+            self.action_fold()  # a group header opens and closes
+            return
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
             IssueDetailScreen(

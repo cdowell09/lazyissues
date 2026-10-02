@@ -1,13 +1,16 @@
 """The Textual application shell: one tab per view."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
+from lazyissues import clipboard
 from lazyissues import config as config_module
 from lazyissues.config import Config, ConfigError, SavedFilter
 from lazyissues.detail import IssueDetailScreen
@@ -44,6 +47,7 @@ class LazyIssuesApp(App[None]):
         Binding("r", "refresh", "Refresh"),
         Binding("S", "preferences", "Preferences"),
         Binding("question_mark", "keys", "Keys"),
+        clipboard.COPY,
     ]
     # Tabs and views size to their content by default, which leaves a view no height.
     CSS = "TabbedContent, TabPane > * { height: 1fr; }"
@@ -54,10 +58,16 @@ class LazyIssuesApp(App[None]):
         github: Gateway,
         cache: Path | None = None,
         config_path: Path | None = None,
+        *,
+        system_clipboard: Callable[[str], None] = clipboard.copy,
     ) -> None:
         """`cache` is the directory for snapshots, and `config_path` the file `config`
-        came from; without them, nothing is saved."""
+        came from; without them, nothing is saved.
+
+        `system_clipboard` copies text where OSC 52 can't reach; tests pass a fake.
+        """
         super().__init__()
+        self.system_clipboard = system_clipboard
         self.config = config
         self.github = github
         self.cache = cache
@@ -96,6 +106,22 @@ class LazyIssuesApp(App[None]):
     def save_filters(self, filters: list[SavedFilter]) -> None:
         """Keep `filters` as the saved filters, in the config file too when there is one."""
         self.save_config(replace(self.config, filters=filters))
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Every copy (selected text, an input's selection) goes through here."""
+        super().copy_to_clipboard(text)  # OSC 52, for terminals that support it
+        self.system_clipboard(text)  # and the system's, for those that don't
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool:
+        if action == "copy_selection":
+            return bool(self.screen.get_selected_text())
+        return True
+
+    def on_text_selected(self, _: events.TextSelected) -> None:
+        self.refresh_bindings()  # to show or hide Copy
+
+    def action_copy_selection(self) -> None:
+        self.screen.action_copy_text()
 
     def action_refresh(self) -> None:
         if pane := self.query_one(TabbedContent).active_pane:
