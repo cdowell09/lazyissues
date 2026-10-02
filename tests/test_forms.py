@@ -209,7 +209,7 @@ async def test_an_empty_comment_is_not_sent_and_escape_cancels():
 
 def list_row(app: LazyIssuesApp, key: str) -> list[str]:
     table = app.query_one("#my-work DataTable", DataTable)
-    return [str(cell) for cell in table.get_row(key)]
+    return [str(cell) for cell in table.get_row(key)[1:]]
 
 
 async def test_a_assigns_from_the_roster_and_repo_assignees_keeping_picks_the_filter_hides():

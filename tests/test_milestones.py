@@ -15,7 +15,7 @@ from lazyissues.views.milestones import Milestones
 
 def firsts(app: LazyIssuesApp) -> list[str]:
     table = app.query_one("#milestones DataTable", DataTable)
-    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
 
 async def shown(app: LazyIssuesApp) -> list[str]:
@@ -58,7 +58,7 @@ async def test_says_when_the_repo_set_has_no_open_milestones():
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
         table = app.query_one("#milestones DataTable", DataTable)
-        assert [str(cell) for cell in table.get_row_at(0)][:2] == [
+        assert [str(cell) for cell in table.get_row_at(0)][1:3] == [
             "",
             "No open milestones in the repo set.",
         ]

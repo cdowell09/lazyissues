@@ -42,10 +42,10 @@ def table(app: App, view: str = "my-work") -> DataTable:
 
 
 def first_cell(app: App, row: int, view: str = "my-work") -> str:
-    return str(table(app, view).get_row_at(row)[0])
+    return str(table(app, view).get_row_at(row)[1])
 
 
-# Each row starts with its checkbox (the table's row label: "☐" between paddings); a cell's
+# Each row starts with its checkbox (the first column: "☐" between paddings); a cell's
 # text starts one column into the cell, after its padding.
 ISSUE_TEXT = 4
 

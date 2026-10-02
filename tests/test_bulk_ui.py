@@ -5,12 +5,14 @@ from collections.abc import Callable
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, Static, TabbedContent
+from textual.widgets.data_table import RowKey
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.keys import KeysScreen
 from lazyissues.mover import RejectedMoveBanner
+from lazyissues.views.issue_list import IssueList
 
 TIDE_12 = "octo-dev/tidepool#12"  # In Progress, from the `in-progress` label
 TIDE_15 = "octo-dev/tidepool#15"  # In Review (two status labels)
@@ -24,14 +26,21 @@ def table(app: App, view: str = "my-work") -> DataTable:
     return app.query_one(f"#{view} DataTable", DataTable)
 
 
+def mark(app: App, row: RowKey, view: str = "my-work") -> str:
+    """A row's checkbox, its first cell."""
+    return str(table(app, view).get_row(row)[0])
+
+
 def checked(app: App, view: str = "my-work") -> set[str]:
     """The keys of the issues whose rows are checked."""
     rows = table(app, view).ordered_rows
-    return {str(row.key.value) for row in rows if row.key.value and str(row.label) == "☑"}
+    return {str(row.key.value) for row in rows if row.key.value and mark(app, row.key, view) == "☑"}
 
 
 def header_marks(app: App, view: str = "my-work") -> list[str]:
-    return [str(row.label) for row in table(app, view).ordered_rows if row.key.value is None]
+    return [
+        mark(app, row.key, view) for row in table(app, view).ordered_rows if row.key.value is None
+    ]
 
 
 async def ready(pilot: Pilot) -> None:
@@ -108,13 +117,27 @@ async def test_clicking_a_checkbox_toggles_its_issue_or_group_without_opening_or
         assert header_marks(app)[1] == "☑"  # and the group stays unfolded
 
 
+async def test_a_click_just_after_a_redraw_lands_on_the_checkbox_it_was_aimed_at():
+    """A redraw (a click on a checkbox, a refresh) rebuilds the table, which finishes
+    laying it out only once idle. A click before then must find the same cell, or a quick
+    second click on a checkbox opens its issue instead."""
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        region = table(app).region  # its checkbox, under the headers:
+        x, y = region.x + 1, region.y + table(app).get_row_index(TIDE_12) + 1
+        aimed_at = app.screen.get_style_at(x, y).meta
+        app.query_one("#my-work", IssueList).show()
+        assert app.screen.get_style_at(x, y).meta == aimed_at
+
+
 def groups(app: App, view: str = "my-work") -> dict[str, list[str]]:
     """Each group's issue keys, by the group's name."""
     shown: dict[str, list[str]] = {}
     group: list[str] = []
     for row in table(app, view).ordered_rows:
         if row.key.value is None:
-            header = str(table(app, view).get_row(row.key)[0])
+            header = str(table(app, view).get_row(row.key)[1])
             group = shown.setdefault(header.rsplit(" (", 1)[0], [])
         else:
             group.append(row.key.value)
@@ -242,7 +265,7 @@ async def test_bulk_assign_offers_the_team_first_and_reports_each_issue():
         await pilot.press("escape")
         await ready(pilot)
         # Shown where it's listed, as a single assignment is.
-        assert str(table(app, "unassigned").get_row(TIDE_18)[3]) == "sam-reef"
+        assert str(table(app, "unassigned").get_row(TIDE_18)[4]) == "sam-reef"
         [docs] = [i for i in await github.search_issues("is:issue") if i.key == TIDE_18]
         assert docs.assignees == ("sam-reef",)
 

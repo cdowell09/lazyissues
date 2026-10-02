@@ -44,9 +44,12 @@ from lazyissues.view_model import (
 )
 from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 
-COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
+# The first column is each row's checkbox, a column rather than Textual's row label: a
+# redraw drops the label column until the table is next idle, and a click in between
+# landed on the cell beside it. Columns stay put.
+COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
-CHECKED, UNCHECKED = "☑", "☐"  # each row's label: whether it is selected; a click toggles it
+CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
 
 
 class IssueTable(DataTable):
@@ -152,7 +155,7 @@ class IssueList(IssueActions, Widget):
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Search number, title, assignee, label", id="search")
-        yield IssueTable(cursor_type="row")
+        yield IssueTable(cursor_type="row", fixed_columns=1)  # the checkboxes
         yield Static(id="filters")
         yield Static("Refreshing…", id="refreshing")
 
@@ -239,18 +242,18 @@ class IssueList(IssueActions, Widget):
         for group in groups:
             mark = self._mark(issue.key for issue in group.issues)
             header = Text(self.header(group), style="bold")
-            table.add_row(header, *[""] * (len(COLUMNS) - 1), label=mark)
+            table.add_row(mark, header, *[""] * (len(COLUMNS) - 2))
             self._rows.append((group.name, None))
             for listed in group.rows:
                 # Team lists a shared issue under each assignee; row keys must be unique.
                 key = listed.issue.key
                 key = key if key not in table.rows else f"{group.name}/{key}"
-                table.add_row(*self._cells(listed), key=key, label=self._mark([listed.issue.key]))
+                table.add_row(self._mark([listed.issue.key]), *self._cells(listed), key=key)
                 self._rows.append((group.name, listed))
         if not groups:
             # With nothing loaded, a failed refresh's error stays after its toast goes.
             message = "No issues match." if self.state.filtering else self.error or self.EMPTY
-            table.add_row("", message, *[""] * (len(COLUMNS) - 2))
+            table.add_row("", "", message, *[""] * (len(COLUMNS) - 3))
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)
         table.move_cursor(row=row)
@@ -303,7 +306,7 @@ class IssueList(IssueActions, Widget):
     def on_click(self, event: events.Click) -> None:
         """A click on a row selects it, and on the selected row opens it. A click on a group
         header, or on a parent's fold arrow, folds or unfolds it. A click on a checkbox
-        (the row's label) selects its issue, or its group's, for a bulk action."""
+        (the first column) selects its issue, or its group's, for a bulk action."""
         table = self.query_one(DataTable)
         at = event.style.meta.get("row", -1)
         if table.text_selection is not None or not 0 <= at < len(self._rows):
@@ -311,7 +314,7 @@ class IssueList(IssueActions, Widget):
         event.stop()
         again = at == table.cursor_row
         table.move_cursor(row=at)
-        if event.style.meta.get("column") == -1:  # Textual's column of row labels
+        if event.style.meta.get("column") == 0:  # the checkboxes
             self.action_toggle_selected()
         elif self._rows[at][1] is None or self._on_fold_arrow(table, event):
             self.action_fold()

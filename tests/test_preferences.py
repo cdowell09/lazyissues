@@ -26,7 +26,7 @@ from lazyissues.status_list import StatusList
 
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
 
 
 def active_tab(app: LazyIssuesApp) -> str:
