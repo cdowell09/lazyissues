@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 
@@ -26,6 +27,24 @@ class Issue:
     def ref(self) -> str:
         """Short form shown in lists: `name#number`."""
         return f"{self.repo.split('/', 1)[1]}#{self.number}"
+
+
+class CloseReason(StrEnum):
+    """How an issue was closed; the values are GitHub's."""
+
+    COMPLETED = "COMPLETED"
+    NOT_PLANNED = "NOT_PLANNED"
+    DUPLICATE = "DUPLICATE"
+
+    @property
+    def label(self) -> str:
+        return self.lower().replace("_", " ")
+
+
+def parse_key(key: str) -> tuple[str, int]:
+    """The repo and number of an issue key, `owner/name#number`."""
+    repo, _, number = key.partition("#")
+    return repo, int(number)
 
 
 EventKind = Literal[
