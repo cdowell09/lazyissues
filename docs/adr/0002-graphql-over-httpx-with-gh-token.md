@@ -1,0 +1,3 @@
+# Call GitHub GraphQL directly, reusing the gh CLI's token
+
+Lazyjira shelled out to jira-cli for reads and used REST only where the CLI fell short, and parsing the CLI's tab-padded output was fragile. Lazyissues calls GitHub's GraphQL API directly with `httpx`, using the token printed by `gh auth token`, so it reuses the existing `gh` login without a separate setup step. One GraphQL query can fetch issues across the repo set together with labels, assignees, milestones, and sub-issue links. Sub-issues and close reasons are also better supported in GraphQL than in the CLI. The `gh` CLI remains a dependency only for `gh auth token`. Issues open in the browser through Python's `webbrowser` module, which also works on Linux and Windows.

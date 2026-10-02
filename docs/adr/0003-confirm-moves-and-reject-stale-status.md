@@ -1,0 +1,3 @@
+# Confirm moves before changing status and guard against stale reads
+
+An issue's displayed status changes only after GitHub confirms its move, and a rejected move remains visible until dismissed. Concurrent reads are stamped when requested so a result requested before a confirmed move cannot restore the older status. This preserves confirmed moves while allowing background detail, list, milestone, and filter reads to continue. Carried over from lazyjira, where optimistic updates were rejected because a move can fail (a missing label permission, a project the token cannot write) and a background refresh could silently undo a confirmed one. This decision concerns moves, not assignment or field-edit confirmation behavior.
