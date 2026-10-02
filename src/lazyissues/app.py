@@ -135,6 +135,19 @@ class LazyIssuesApp(App[None]):
             return bool(self.screen.get_selected_text())
         return True
 
+    async def on_event(self, event: events.Event) -> None:
+        # Textual clears the selected text on a click anywhere but a scrollbar, and the
+        # footer's Copy acts on the press, which a quick click's release (handled first)
+        # beat. A click on the footer keeps the selection, so Copy has the text to copy.
+        if not isinstance(event, events.MouseUp):
+            await super().on_event(event)
+            return
+        screen, kept = self.screen, self.screen.selections
+        on_footer = any(footer.region.contains(event.x, event.y) for footer in screen.query(Footer))
+        await super().on_event(event)
+        if on_footer:
+            screen.selections = kept
+
     def on_text_selected(self, _: events.TextSelected) -> None:
         self.refresh_bindings()  # to show or hide Copy
 

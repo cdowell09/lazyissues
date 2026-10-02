@@ -83,6 +83,15 @@ async def wheel(pilot: Pilot, widget: Widget, notches: int = 3) -> None:
         await terminal(pilot, events.MouseScrollDown, widget, middle)
 
 
+async def quick_click(pilot: Pilot, widget: Widget) -> None:
+    """Click `widget` as a terminal sends a quick click: the press and release together,
+    so the app handles the release before anything the press set off."""
+    x, y = widget.region.offset
+    for event in (events.MouseDown, events.MouseUp):
+        pilot.app.post_message(event(None, x, y, 0, 0, 1, False, False, False, x, y))
+    await pilot.pause()
+
+
 async def drag(pilot: Pilot, widget: Widget, start: tuple[int, int], end: tuple[int, int]) -> None:
     """Press the mouse at `start` in `widget`, move it to `end` and release it there."""
     await terminal(pilot, events.MouseDown, widget, start)
@@ -255,7 +264,7 @@ async def test_the_footer_offers_copy_while_text_is_selected():
         await drag(pilot, title, (0, 0), (len(ref) - 1, 0))
         key = copy_key(app)
         assert key is not None
-        await pilot.click(key)
+        await quick_click(pilot, key)
         assert copied == [ref]
 
 
