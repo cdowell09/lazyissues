@@ -1,0 +1,53 @@
+[project]
+name = "lazyissues"
+version = "0.1.0"
+description = "A fast terminal UI for GitHub Issues"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Christian Dowell" }]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28",
+    "platformdirs>=4.12",
+    "textual>=8.2",
+    "tomlkit>=0.15",
+]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Repository = "https://github.com/cdowell09/lazyissues"
+
+[project.scripts]
+lazyissues = "lazyissues.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.16",
+    "ty>=0.0.84",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# Textual declares BINDINGS, CSS etc. as mutable class attributes.
+ignore = ["RUF012"]

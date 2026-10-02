@@ -1,0 +1,35 @@
+import sys
+
+import pytest
+from textual.widgets import DataTable
+
+from lazyissues import __main__, demo
+from lazyissues.app import LazyIssuesApp
+from lazyissues.fake import FakeGitHub
+
+
+def rows(app: LazyIssuesApp) -> list[list[str]]:
+    table = app.query_one("#my-work DataTable", DataTable)
+    return [[str(cell) for cell in table.get_row_at(i)] for i in range(table.row_count)]
+
+
+async def test_my_work_lists_my_open_issues_across_the_repo_set():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        assert [row[0] for row in rows(app)] == ["tidepool#12", "tidepool#15", "lanternfish#4"]
+        assert rows(app)[2][2] == "octo-dev, sam-reef"
+
+
+async def test_my_work_says_when_nothing_is_assigned():
+    app = LazyIssuesApp(demo.config(), FakeGitHub(viewer="nobody"))
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        assert rows(app) == [["", "No open issues are assigned to you.", "", ""]]
+
+
+def test_bad_config_exits_before_the_tui_starts(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(__main__.config_module, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["lazyissues"])
+    with pytest.raises(SystemExit, match="No config"):
+        __main__.main()
