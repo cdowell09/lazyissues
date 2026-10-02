@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from lazyissues.models import Issue
@@ -57,9 +59,9 @@ def test_an_unreadable_snapshot_is_discarded_and_rebuilt(tmp_path, content):
 def test_a_read_requested_before_the_loaded_one_is_ignored(tmp_path):
     path = tmp_path / "snapshot.json"
     store = IssueStore(path)
-    assert store.replace([issue(1, "newer")], requested_at=2.0)
+    store.replace([issue(1, "newer")], requested_at=2.0)
 
-    assert not store.replace([issue(1, "older")], requested_at=1.0)
+    store.replace([issue(1, "older")], requested_at=1.0)
     assert store.issues == [issue(1, "newer")]
     assert IssueStore(path).issues == [issue(1, "newer")]
 
@@ -77,7 +79,7 @@ def test_an_unwritable_cache_still_updates_the_loaded_issues(tmp_path):
     blocker.write_text("a file where the cache directory should be", encoding="utf-8")
     store = IssueStore(blocker / "snapshot.json")
 
-    assert store.replace([issue(1)], requested_at=1.0)
+    store.replace([issue(1)], requested_at=1.0)
     assert store.issues == [issue(1)]
 
 
@@ -86,6 +88,26 @@ def test_a_store_without_a_snapshot_lives_in_memory(tmp_path, monkeypatch):
     store = IssueStore()
     assert store.issues == []
 
-    assert store.replace([issue(1)], requested_at=1.0)
+    store.replace([issue(1)], requested_at=1.0)
     assert store.issues == [issue(1)]
     assert list(tmp_path.iterdir()) == []
+
+
+async def test_a_refresh_answered_after_a_later_one_is_ignored():
+    store = IssueStore()
+    gate = asyncio.Event()
+
+    async def slow_read() -> list[Issue]:
+        await gate.wait()
+        return [issue(1, "older")]
+
+    async def fast_read() -> list[Issue]:
+        return [issue(1, "newer")]
+
+    slow = asyncio.create_task(store.refresh(slow_read()))
+    await asyncio.sleep(0)  # the slow read is requested first
+    await store.refresh(fast_read())
+    gate.set()
+    await slow
+
+    assert store.issues == [issue(1, "newer")]

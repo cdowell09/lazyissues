@@ -3,6 +3,8 @@
 import hashlib
 import json
 import math
+import time
+from collections.abc import Awaitable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,9 @@ import platformdirs
 
 from lazyissues.models import Issue
 
-SNAPSHOT_VERSION = 2  # bump whenever `Issue` changes shape
+# Bump whenever `Issue` changes shape. Snapshots store `Issue` fields as JSON, so
+# they must stay strings, numbers, booleans, None, or tuples and dicts of those.
+SNAPSHOT_VERSION = 2
 
 
 def cache_dir() -> Path:
@@ -38,14 +42,21 @@ class IssueStore:
         self.issues: list[Issue] = self._load()
         self.requested_at = -math.inf  # when the read behind `issues` was requested
 
-    def replace(self, issues: list[Issue], requested_at: float) -> bool:
-        """Apply a read stamped with when it was requested; false if it was older (ADR 0003)."""
+    async def refresh(self, read: Awaitable[list[Issue]]) -> None:
+        """Await a read from GitHub and apply it, stamped with when it was requested."""
+        requested_at = time.monotonic()
+        self.replace(await read, requested_at)
+
+    def replace(self, issues: list[Issue], requested_at: float) -> None:
+        """Apply a read unless it was requested before the one already applied (ADR 0003).
+
+        `requested_at` is on `time.monotonic()`'s clock, like `refresh`'s stamps.
+        """
         if requested_at < self.requested_at:
-            return False
+            return
         self.issues = list(issues)
         self.requested_at = requested_at
         self._save()
-        return True
 
     def _load(self) -> list[Issue]:
         """The snapshot's issues; a missing, corrupt or old-format one is discarded."""

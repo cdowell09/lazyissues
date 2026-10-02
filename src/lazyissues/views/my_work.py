@@ -1,7 +1,5 @@
 """My Work: open issues assigned to the current user across the repo set."""
 
-import time
-
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.reactive import var
@@ -53,16 +51,15 @@ class MyWork(Widget):
         self.run_worker(self._load())
 
     async def _load(self) -> None:
-        requested_at = time.monotonic()
+        query = search.scoped(QUERY, self.config.repo_names)
         try:
-            issues = await self.github.search_issues(search.scoped(QUERY, self.config.repo_names))
+            await self.store.refresh(self.github.search_issues(query))
         except GitHubError as e:
             self.notify(str(e), title="Couldn't refresh My Work", severity="error", timeout=10)
             return
         finally:
             self.refreshing = False
-        if self.store.replace(issues, requested_at):
-            self.show()
+        self.show()
 
     def show(self) -> None:
         """Draw the store's issues, keeping the cursor on the same issue if it's still listed."""

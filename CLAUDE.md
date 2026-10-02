@@ -24,7 +24,7 @@ Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platform
 - **`demo`**: made-up config and data for `--demo`
 - **`models`**: domain records (`Issue`)
 - **`statuses`**: `StatusRules`, the only code that interprets statuses: resolves an issue's status from its repo's status source, groups issues in display order, answers done and active
-- **`store`**: `IssueStore`, the loaded issues and their snapshot in the platform cache dir, one per repo set; `replace` applies a read stamped with its `requested_at`
+- **`store`**: `IssueStore`, the loaded issues and their snapshot in the platform cache dir, one per repo set; `refresh` stamps each read with when it was requested, and `replace` ignores a read older than the one applied
 - **`search`**: scoping search queries to the repo set
 - **`config`**: `config.toml` location and loading
 
