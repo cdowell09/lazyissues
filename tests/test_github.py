@@ -1,10 +1,11 @@
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from lazyissues.github import GitHubError, GraphQLGateway
-from lazyissues.models import Issue
+from lazyissues.models import Event, Issue, ProjectField
 
 
 def node(number: int) -> dict:
@@ -80,6 +81,121 @@ async def test_search_reads_state_and_each_projects_status():
 
     assert issue.closed
     assert issue.project_statuses == {"o/1": "In Progress"}
+
+
+def at(minute: int) -> datetime:
+    return datetime(2026, 9, 1, 12, minute, tzinfo=UTC)
+
+
+def stamp(minute: int) -> str:
+    return f"2026-09-01T12:{minute:02}:00Z"
+
+
+async def test_issue_detail_builds_body_hierarchy_project_fields_and_activity():
+    sent = []
+    issue = node(5) | {
+        "body": "Steps:\n\n1. Open",
+        "state": "CLOSED",
+        "milestone": {"title": "v1"},
+        "parent": node(1),
+        "subIssues": {"nodes": [node(6), node(7)]},
+        "projectItems": {
+            "nodes": [
+                {
+                    # Merged from `IssueFields` (Status) and the detail (every field).
+                    "project": {"title": "Roadmap", "number": 2, "owner": {"login": "o"}},
+                    "fieldValueByName": {"name": "Todo"},
+                    "fieldValues": {
+                        "nodes": [
+                            {"name": "Reliability", "field": {"name": "Theme"}},
+                            {"title": "Sprint 3", "field": {"name": "Iteration"}},
+                            {},  # a field type the detail doesn't show
+                        ]
+                    },
+                }
+            ]
+        },
+        "timelineItems": {
+            "nodes": [
+                {
+                    "__typename": "LabeledEvent",
+                    "actor": {"login": "me"},
+                    "createdAt": stamp(0),
+                    "label": {"name": "bug"},
+                },
+                {
+                    "__typename": "IssueComment",
+                    "actor": {"login": "sam"},  # aliased from `author`
+                    "createdAt": stamp(1),
+                    "body": "Seen it **too**",
+                },
+                {
+                    "__typename": "AssignedEvent",
+                    "actor": {"login": "me"},
+                    "createdAt": stamp(2),
+                    "assignee": {"login": "sam"},
+                },
+                {
+                    "__typename": "MilestonedEvent",
+                    "actor": None,  # a deleted account
+                    "createdAt": stamp(3),
+                    "milestoneTitle": "v1",
+                },
+                {
+                    "__typename": "ClosedEvent",
+                    "actor": {"login": "me"},
+                    "createdAt": stamp(4),
+                    "stateReason": "NOT_PLANNED",
+                },
+            ]
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["variables"])
+        return httpx.Response(200, json={"data": {"repository": {"issue": issue}}})
+
+    detail = await gateway(handler).issue_detail("o/r", 5)
+
+    assert sent == [{"owner": "o", "name": "r", "number": 5}]
+    assert detail.issue.key == "o/r#5"
+    assert detail.issue.closed
+    assert detail.issue.project_statuses == {"o/2": "Todo"}
+    assert detail.body == "Steps:\n\n1. Open"
+    assert detail.milestone == "v1"
+    assert detail.parent is not None
+    assert detail.parent.key == "o/r#1"
+    assert [sub.number for sub in detail.sub_issues] == [6, 7]
+    assert detail.project_fields == (
+        ProjectField("Roadmap", "Theme", "Reliability"),
+        ProjectField("Roadmap", "Iteration", "Sprint 3"),
+    )
+    assert detail.activity == (
+        Event("me", at(0), "labeled", "bug"),
+        Event("sam", at(1), "commented", "Seen it **too**"),
+        Event("me", at(2), "assigned", "sam"),
+        Event("ghost", at(3), "milestoned", "v1"),
+        Event("me", at(4), "closed", "not planned"),
+    )
+    assert detail.comments == (Event("sam", at(1), "commented", "Seen it **too**"),)
+
+
+async def test_issue_detail_of_an_open_issue_without_extras():
+    issue = node(5) | {
+        "body": "",
+        "milestone": None,
+        "parent": None,
+        "subIssues": {"nodes": []},
+        "projectItems": {"nodes": []},
+        "timelineItems": {"nodes": []},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"repository": {"issue": issue}}})
+
+    detail = await gateway(handler).issue_detail("o/r", 5)
+
+    assert (detail.milestone, detail.parent, detail.activity) == (None, None, ())
 
 
 async def test_graphql_errors_raise():

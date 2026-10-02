@@ -1,6 +1,11 @@
+from dataclasses import replace
+
+import pytest
+
 from lazyissues import demo
 from lazyissues.fake import FakeGitHub
-from lazyissues.models import Issue
+from lazyissues.github import GitHubError
+from lazyissues.models import Issue, IssueDetail
 
 
 async def test_fake_understands_the_queries_the_app_sends():
@@ -30,3 +35,27 @@ async def test_fake_treats_an_issue_seeded_closed_as_closed():
     github = FakeGitHub(viewer="me", issues=[Issue("a/x", 1, "Old", "u", closed=True)])
     assert [issue.closed for issue in await github.search_issues("is:closed")] == [True]
     assert await github.search_issues("is:open") == []
+
+
+async def test_fake_detail_reflects_the_current_issue_and_state():
+    github = demo.github()
+    key = "octo-dev/tidepool#12"
+    github.details[key] = IssueDetail(github.issues[0], body="Old")
+    github.issues[0] = replace(github.issues[0], title="Renamed")
+    github.closed.add(key)
+
+    detail = await github.issue_detail("octo-dev/tidepool", 12)
+
+    assert (detail.issue.title, detail.issue.closed, detail.body) == ("Renamed", True, "Old")
+
+
+async def test_fake_detail_of_an_issue_with_no_extras_is_empty():
+    detail = await FakeGitHub(viewer="me", issues=[Issue("o/r", 1, "One", "u")]).issue_detail(
+        "o/r", 1
+    )
+    assert detail == IssueDetail(Issue("o/r", 1, "One", "u"))
+
+
+async def test_fake_detail_of_a_missing_issue_raises():
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        await demo.github().issue_detail("octo-dev/tidepool", 999)
