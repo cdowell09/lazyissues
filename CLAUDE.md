@@ -40,5 +40,15 @@ GraphQL over `httpx`, authenticated with `gh auth token` ([ADR 0002](docs/adr/00
 
 `README.md` is the onboarding doc for install, setup and keybindings; update it with any user-facing change.
 
+## Before a PR lands
+
+Run all three reviews against the PR's diff, rank every finding P0–P3, and fix every P0–P2 before merging:
+
+- `/ponytail:ponytail-review`: over-engineering
+- `/pragmatic-programmer`: craftsmanship (DRY, orthogonality, contracts)
+- `/thermo-nuclear-code-quality-review`: structure and maintainability
+
+P0 breaks behavior or loses data, P1 is a bug or structural regression, P2 is a maintainability problem worth fixing now, P3 is a nit. List the P3s you left in the PR description.
+
 ## Commit Messages
 Follow @COMMIT_STYLING.md
