@@ -6,7 +6,9 @@ through issues here tells the view, through `select`, which issue to select.
 
 import webbrowser
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -16,6 +18,8 @@ from textual.widgets import Footer, Markdown, Static
 
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Event, EventKind, Issue, IssueDetail
+from lazyissues.mover import Mover
+from lazyissues.store import now
 
 _ACTIONS: dict[EventKind, str] = {
     "commented": "commented",
@@ -100,6 +104,7 @@ class IssueDetailScreen(ModalScreen[None]):
         Binding("z", "toggle_full", "Full screen"),
         Binding("o", "open_in_browser", "Open in browser"),
         Binding("h", "toggle_activity", "Activity"),
+        Binding("m", "move", "Move"),
         Binding("escape", "dismiss", "Close"),
     ]
 
@@ -127,11 +132,13 @@ class IssueDetailScreen(ModalScreen[None]):
         issues: Sequence[Issue],
         index: int,
         select: Callable[[Issue], None],
+        mover: Mover,
     ) -> None:
         super().__init__()
         self.github = github
         self.details = details
-        self.issues = issues
+        self.issues = list(issues)
+        self.mover = mover
         self.index = index
         self.select = select
         self.showing_activity = False
@@ -146,7 +153,12 @@ class IssueDetailScreen(ModalScreen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.mover.changed.subscribe(self, self.on_moved)
         self.show_issue()
+
+    def on_moved(self, moved: Issue) -> None:
+        self.issues = [moved if issue.key == moved.key else issue for issue in self.issues]
+        self.refresh_content()
 
     def show_issue(self) -> None:
         self.error = None
@@ -157,6 +169,8 @@ class IssueDetailScreen(ModalScreen[None]):
         detail = self.details.get(self.issue.key)
         issue = detail.issue if detail else self.issue
         widgets: list[Widget] = [_line(_issue_line(issue), "title")]
+        if pending := self.mover.moves.pending(issue.key):
+            widgets.append(_line(f"⋯ {pending}", "meta"))
         if self.error:
             widgets.append(_line(self.error, "error"))
         elif detail is None:
@@ -170,10 +184,14 @@ class IssueDetailScreen(ModalScreen[None]):
 
     async def fetch(self, issue: Issue) -> None:
         # Stepping starts a new fetch in this exclusive group, cancelling this one.
+        requested_at = now()
         try:
-            self.details[issue.key] = await self.github.issue_detail(issue.repo, issue.number)
+            detail = await self.github.issue_detail(issue.repo, issue.number)
         except GitHubError as e:
             self.error = f"Couldn't load {issue.ref}: {e}"
+        else:  # a move confirmed since the fetch was sent keeps its status (ADR 0003)
+            moved = self.mover.moves.settle(detail.issue, requested_at)
+            self.details[issue.key] = replace(detail, issue=moved)
         self.refresh_content()
 
     def action_step(self, delta: int) -> None:
@@ -188,6 +206,12 @@ class IssueDetailScreen(ModalScreen[None]):
 
     def action_open_in_browser(self) -> None:
         webbrowser.open(self.issue.url)
+
+    def action_move(self) -> None:
+        self.mover.pick(self.issue)
+
+    def on_key(self, event: events.Key) -> None:
+        self.mover.shortcut(self.issue, event)
 
     def action_toggle_activity(self) -> None:
         self.showing_activity = not self.showing_activity

@@ -92,3 +92,21 @@ def test_project_options_that_mean_done():
         True,
         False,
     ]
+
+
+def test_project_backed_repos_reach_their_projects_options_except_done():
+    rules = StatusRules(CONFIG)
+    options = ["Todo", "in-progress", "Blocked", "Done", "Closed"]
+    assert rules.reachable(issue("a/board"), options) == ["Todo", "In Progress", "Blocked"]
+    assert rules.reachable(issue("a/labels"), options) == ["Todo", "In Progress", "In Review"]
+
+
+def test_status_labels_only_exist_in_label_backed_repos():
+    rules = StatusRules(CONFIG)
+    assert rules.status_labels(issue(labels=("bug", "todo", "In-Review"))) == ["todo", "In-Review"]
+    assert rules.status_labels(issue("a/board", labels=("todo",))) == []
+
+
+def test_shortcuts_map_lowercase_keys_to_statuses():
+    config = Config(repos=[], statuses=[Status("Todo"), Status("In Progress", key="P")])
+    assert StatusRules(config).shortcuts() == {"p": "In Progress"}

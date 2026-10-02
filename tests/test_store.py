@@ -3,6 +3,8 @@ import asyncio
 import pytest
 
 from lazyissues.models import Issue
+from lazyissues.move_planner import AddLabel, RemoveLabels
+from lazyissues.move_tracker import MoveTracker
 from lazyissues.store import SNAPSHOT_VERSION as V
 from lazyissues.store import IssueStore, snapshot_path
 
@@ -113,3 +115,30 @@ async def test_a_refresh_answered_after_a_later_one_is_ignored():
     await slow
 
     assert store.issues == [issue(1, "newer")]
+
+
+def test_a_read_requested_before_a_confirmed_move_keeps_that_issues_new_status(tmp_path):
+    moves = MoveTracker()
+    store = IssueStore(tmp_path / "snapshot.json", moves)
+    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0)
+    moves.start(store.issues[0], "doing")
+    moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
+
+    # Requested before the move was confirmed, answered after it.
+    store.replace([issue(1, "renamed", labels=("todo",)), issue(2, "renamed")], 4.0)
+
+    assert store.issues == [issue(1, "renamed", labels=("doing",)), issue(2, "renamed")]
+
+
+def test_a_confirmed_move_shows_on_the_loaded_issues_and_their_snapshot(tmp_path):
+    path = tmp_path / "snapshot.json"
+    moves = MoveTracker()
+    store = IssueStore(path, moves)
+    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0)
+    moves.start(store.issues[0], "doing")
+    moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
+
+    store.apply_moves()
+
+    assert store.issues == [issue(1, labels=("doing",)), issue(2)]
+    assert IssueStore(path).issues == store.issues

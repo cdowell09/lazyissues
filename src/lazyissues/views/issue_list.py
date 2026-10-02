@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.reactive import var
@@ -22,6 +23,7 @@ from lazyissues.config import Config
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
+from lazyissues.mover import Mover
 from lazyissues.statuses import DONE, StatusRules
 from lazyissues.store import IssueStore
 from lazyissues.view_model import (
@@ -52,6 +54,7 @@ class IssueList(Widget):
         Binding("z", "fold", "Fold"),
         Binding("Z", "fold_all", "Fold all", show=False),
         Binding("R", "repo_filter", "Repo"),
+        Binding("m", "move", "Move"),
     ]
 
     LABEL: ClassVar[str]  # the tab's title
@@ -67,6 +70,7 @@ class IssueList(Widget):
         github: Gateway,
         store: IssueStore,
         details: dict[str, IssueDetail],
+        mover: Mover,
         *,
         id: str,
     ) -> None:
@@ -75,6 +79,7 @@ class IssueList(Widget):
         self.github = github
         self.store = store
         self.details = details  # the app's detail cache, shared by every view
+        self.mover = mover  # the app's, shared by every view
         self.rules = StatusRules(config)
         # Each table row's group, and its issue (None for a header or the empty message).
         self._rows: list[tuple[str, Issue | None]] = []
@@ -99,6 +104,7 @@ class IssueList(Widget):
 
     def on_mount(self) -> None:
         self.query_one(DataTable).add_columns(*COLUMNS)
+        self.mover.changed.subscribe(self, self._on_moved)
         if self.store.issues:
             self.show()
         self.reload()
@@ -172,8 +178,9 @@ class IssueList(Widget):
 
     def _cells(self, issue: Issue) -> tuple[str, ...]:
         status = self.rules.status_of(issue)
+        pending = self.store.moves.pending(issue.key)
         return (
-            issue.ref + (" ⚠" if status.ambiguous else ""),
+            issue.ref + (" ⚠" if status.ambiguous else "") + (f" ⋯ {pending}" if pending else ""),
             issue.title,
             status.name,
             ", ".join(issue.assignees),
@@ -201,7 +208,9 @@ class IssueList(Widget):
             return  # a group header
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
-            IssueDetailScreen(self.github, self.details, self.issues, index, self.select)
+            IssueDetailScreen(
+                self.github, self.details, self.issues, index, self.select, self.mover
+            )
         )
 
     def select(self, issue: Issue) -> None:
@@ -209,6 +218,23 @@ class IssueList(Widget):
         table = self.query_one(DataTable)
         if issue.key in table.rows:
             table.move_cursor(row=table.get_row_index(issue.key))
+
+    def _on_moved(self, _: Issue) -> None:
+        self.store.apply_moves()
+        self.show()
+
+    def selected(self) -> Issue | None:
+        """The issue under the cursor; None on a group header or an empty list."""
+        row = self.query_one(DataTable).cursor_row
+        return self._rows[row][1] if 0 <= row < len(self._rows) else None
+
+    def action_move(self) -> None:
+        if issue := self.selected():
+            self.mover.pick(issue)
+
+    def on_key(self, event: events.Key) -> None:
+        if self.query_one(DataTable).has_focus and (issue := self.selected()):
+            self.mover.shortcut(issue, event)
 
     def action_search(self) -> None:
         self.add_class("-searching")

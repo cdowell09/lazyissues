@@ -1,6 +1,7 @@
 """Status rules: the one place statuses are interpreted (ADR 0001)."""
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lazyissues.config import Config, Repo
@@ -47,14 +48,23 @@ class StatusRules:
         )
         self._repos = {repo.name.casefold(): repo for repo in config.repos}
 
+    def repo_of(self, issue: Issue) -> Repo:
+        # A repo outside the repo set (a saved filter's own `repo:`) reads status labels.
+        return self._repos.get(issue.repo.casefold(), Repo(issue.repo))
+
+    def status_labels(self, issue: Issue) -> list[str]:
+        """The issue's labels that name a status, as spelled on the issue."""
+        if self.repo_of(issue).project is not None:
+            return []  # in a project-backed repo every label is an ordinary label
+        return [label for label in issue.labels if normalize(label) in self._statuses]
+
     def status_of(self, issue: Issue) -> IssueStatus:
         if self.is_done(issue):
             return IssueStatus(DONE)
-        # A repo outside the repo set (a saved filter's own `repo:`) reads status labels.
-        repo = self._repos.get(issue.repo.casefold(), Repo(issue.repo))
+        repo = self.repo_of(issue)
         if repo.project is not None:
             return self._project_status(issue, repo.project)
-        found = {normalize(label) for label in issue.labels} & self._statuses.keys()
+        found = {normalize(label) for label in self.status_labels(issue)}
         if not found:
             return IssueStatus(NO_STATUS)
         latest = max(found, key=self._rank.__getitem__)
@@ -67,6 +77,18 @@ class StatusRules:
     def is_active(self, status: str) -> bool:
         known = self._statuses.get(normalize(status))
         return known is not None and known.active
+
+    def reachable(self, issue: Issue, project_options: Sequence[str]) -> list[str]:
+        """The statuses a move can give `issue`: every configured status in a label-backed
+        repo; in a project-backed one, the project's options (pass them in board order)
+        except those meaning done, named as configured where they match."""
+        if self.repo_of(issue).project is None:
+            return [status.name for status in self._statuses.values()]
+        return [self._name(option) for option in project_options if not is_done_option(option)]
+
+    def shortcuts(self) -> dict[str, str]:
+        """Each status's move shortcut, lowercase, to the status's name."""
+        return {s.key.lower(): s.name for s in self._statuses.values() if s.key}
 
     def group(self, issues: list[Issue]) -> list[StatusGroup]:
         """Issues by status in display order: "No status", the configured
@@ -84,7 +106,9 @@ class StatusRules:
         # GitHub logins ignore case, so a hand-written `project` may differ from GitHub's.
         statuses = {key.casefold(): value for key, value in issue.project_statuses.items()}
         option = statuses.get(project.casefold())
-        if option is None:
-            return IssueStatus(NO_STATUS)
-        known = self._statuses.get(normalize(option))
-        return IssueStatus(known.name if known else option)
+        return IssueStatus(NO_STATUS if option is None else self._name(option))
+
+    def _name(self, status: str) -> str:
+        """The configured name of `status`, or `status` itself when it isn't configured."""
+        known = self._statuses.get(normalize(status))
+        return known.name if known else status
