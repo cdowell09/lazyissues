@@ -25,11 +25,17 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Python 3.12+
 - The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope: `gh auth refresh -s project`
 
-## Install (planned)
+## Install
+
+lazyissues is not on PyPI yet; these commands work once the first release ships.
 
 ```bash
 uv tool install lazyissues
+# or
+pipx install lazyissues
 ```
+
+Until then, run it from a checkout with `uv run lazyissues`. Maintainers cut releases with [docs/RELEASING.md](docs/RELEASING.md).
 
 ## License
 
