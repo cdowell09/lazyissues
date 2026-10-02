@@ -2,7 +2,7 @@
 
 A fast terminal UI for GitHub Issues, with keyboard and mouse controls for daily triage across your repos and keeping an eye on your team's work.
 
-> **Status:** early development. Nothing is installable yet. The design lives in [CONTEXT.md](CONTEXT.md) (the domain language) and [docs/adr/](docs/adr/) (the decisions behind it).
+> **Status:** early development. Nothing is installable yet. The design lives in [CONTEXT.md](https://github.com/cdowell09/lazyissues/blob/main/CONTEXT.md) (the domain language) and [docs/adr/](https://github.com/cdowell09/lazyissues/tree/main/docs/adr) (the decisions behind it).
 
 lazyissues is the GitHub counterpart of [lazyjira](https://github.com/cdowellmdb/lazyjira). It uses your existing `gh` login, opens instantly from a local cache, and refreshes in the background.
 
@@ -25,12 +25,18 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Python 3.12+
 - The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope: `gh auth refresh -s project`
 
-## Install (planned)
+## Install
+
+lazyissues is not on PyPI yet; these commands work once the first release ships.
 
 ```bash
 uv tool install lazyissues
+# or
+pipx install lazyissues
 ```
+
+Until then, run it from a checkout with `uv run lazyissues`. Maintainers cut releases with [docs/RELEASING.md](https://github.com/cdowell09/lazyissues/blob/main/docs/RELEASING.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/cdowell09/lazyissues/blob/main/LICENSE)
