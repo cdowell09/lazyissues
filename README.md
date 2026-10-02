@@ -65,6 +65,8 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
 | `z` `Z` | lists | fold the group under the cursor, or fold and unfold every group |
 | `R` | lists | show one repo at a time, then all |
+| `m` | lists, detail | move the issue: pick a status, a close reason, or reopen |
+| a status's `key` | lists, detail | open the move picker on that status; the uppercase key moves at once |
 | `←` `→` | detail | previous or next issue in the list underneath |
 | `z` | detail | toggle full screen |
 | `o` | detail | open the issue in your browser |
@@ -76,6 +78,17 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
 Each tab remembers its selection, search, status focus, done toggle, folds and repo filter while the app runs.
+
+## Moves
+
+`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists don't already use.
+
+- In a label-backed repo, a move adds the status's label (creating it in the repo if it has none) and removes every other status label.
+- In a project-backed repo, a move adds the issue to the project if it isn't on it, then sets its Status.
+- Moving an unassigned issue to an active status assigns you.
+- Moving a closed issue to a status reopens it.
+
+The issue keeps its status until GitHub confirms the move; the list and detail show `⋯` and the move meanwhile, and an issue has one move at a time. If GitHub rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the issue in your browser. A refresh that was already running when a move was confirmed doesn't undo it.
 
 ## Cache
 

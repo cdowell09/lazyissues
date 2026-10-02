@@ -6,7 +6,7 @@ import pytest
 from lazyissues import demo
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssueDetail, Project
+from lazyissues.models import CloseReason, Issue, IssueDetail, Project
 
 
 async def test_fake_understands_the_queries_the_app_sends():
@@ -106,3 +106,76 @@ async def test_fake_counts_an_issue_closed_during_the_session_as_closed_today():
     github.closed.add("a/x#1")
     today = datetime.now(UTC).date().isoformat()
     assert len(await github.search_issues(f"closed:>={today}")) == 1
+
+
+def writable() -> FakeGitHub:
+    return FakeGitHub(
+        viewer="me",
+        issues=[
+            Issue("o/r", 1, "One", "u", labels=("bug", "todo")),
+            Issue("o/r", 2, "Two", "u", labels=("in-progress",)),
+            Issue("o/b", 3, "Three", "u", project_statuses={"o/1": "Todo"}),
+            Issue("o/b", 4, "Four", "u"),
+        ],
+        labels={"o/r": ["bug", "todo", "in-progress"]},
+        projects={"o/b": [Project("o/1", "Board", ("Todo", "In progress", "Done"))]},
+    )
+
+
+async def found(github: FakeGitHub, number: int) -> Issue:
+    [issue] = [i for i in await github.search_issues("is:issue") if i.number == number]
+    return issue
+
+
+async def test_fake_adds_the_repos_label_for_a_status_or_creates_it():
+    github = writable()
+    await github.add_label("o/r", 1, "In Progress")  # the repo has `in-progress`
+    await github.add_label("o/r", 1, "In Review")  # the repo has no such label
+    await github.remove_labels("o/r", 1, ["todo"])
+
+    assert (await found(github, 1)).labels == ("bug", "in-progress", "In Review")
+    assert github.labels["o/r"] == ["bug", "todo", "in-progress", "In Review"]
+
+
+async def test_fake_adds_issues_to_projects_and_sets_their_status():
+    github = writable()
+    assert await github.project_status_options("o/1") == ["Todo", "In progress", "Done"]
+
+    await github.set_project_status("o/b", 3, "o/1", "In Progress")
+    assert (await found(github, 3)).project_statuses == {"o/1": "In progress"}
+
+    with pytest.raises(GitHubError, match="not on the project"):
+        await github.set_project_status("o/b", 4, "o/1", "Todo")
+    await github.add_to_project("o/b", 4, "o/1")
+    await github.set_project_status("o/b", 4, "o/1", "Todo")
+    assert (await found(github, 4)).project_statuses == {"o/1": "Todo"}
+
+    with pytest.raises(GitHubError, match="no option"):
+        await github.set_project_status("o/b", 4, "o/1", "Blocked")
+
+
+async def test_fake_closes_with_a_reason_and_reopens():
+    github = writable()
+    await github.close_issue("o/r", 1, CloseReason.DUPLICATE, "o/r#2")
+    assert (await found(github, 1)).closed
+    assert github.close_reasons["o/r#1"] == (CloseReason.DUPLICATE, "o/r#2")
+
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        await github.close_issue("o/r", 2, CloseReason.DUPLICATE, "o/r#99")
+
+    await github.reopen_issue("o/r", 1)
+    assert not (await found(github, 1)).closed
+
+
+async def test_fake_assigns():
+    github = writable()
+    await github.assign("o/r", 2, "me")
+    assert (await found(github, 2)).assignees == ("me",)
+
+
+async def test_fake_rejects_writes_to_a_read_only_repo():
+    github = writable()
+    github.read_only.add("o/r")
+    with pytest.raises(GitHubError, match="Resource not accessible"):
+        await github.add_label("o/r", 1, "Todo")
+    assert (await found(github, 1)).labels == ("bug", "todo")
