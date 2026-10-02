@@ -11,6 +11,7 @@ from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import SavedFilter
 from lazyissues.fake import FakeGitHub
+from lazyissues.forms.edit import EditForm
 from lazyissues.models import Issue
 from lazyissues.views.filters import ConfirmDelete, FilterForm, FilterResults
 
@@ -238,3 +239,21 @@ async def test_each_filter_opens_from_its_own_snapshot_on_the_next_launch(tmp_pa
         await pilot.press("down", "enter")
         await pilot.pause()
         assert firsts(app) == ["Todo (1)", "lanternfish#13"]
+
+
+async def test_the_writing_keys_act_on_the_issue_in_the_results_and_e_edits_it():
+    github = demo.github()
+    app = LazyIssuesApp(demo.config(), github)
+    async with app.run_test() as pilot:
+        await open_filters(pilot)
+        await pilot.press("tab", "down")  # lanternfish#9, under "No status"
+
+        await pilot.press("C", "o", "k", "enter")
+        await settled(pilot)
+        [*_, comment] = (await github.issue_detail("octo-dev/lanternfish", 9)).comments
+        assert comment.text == "ok"
+
+        await pilot.press("e")  # the issue, not the saved filter
+        await settled(pilot)
+        assert isinstance(app.screen, EditForm)
+        assert app.screen.issue.key == "octo-dev/lanternfish#9"

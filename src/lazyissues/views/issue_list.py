@@ -16,7 +16,7 @@ from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingsMap
 from textual.reactive import var
 from textual.selection import Selection
 from textual.strip import Strip
@@ -26,6 +26,7 @@ from textual.widgets import DataTable, Input, Static
 from lazyissues import search
 from lazyissues.config import Config
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.forms.form import Written
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.mover import Mover
@@ -40,6 +41,7 @@ from lazyissues.view_model import (
     focusable_statuses,
     visible_groups,
 )
+from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 
 COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
@@ -76,7 +78,7 @@ class IssueTable(DataTable):
         return selection.extract("\n".join(lines)), "\n"
 
 
-class IssueList(Widget):
+class IssueList(IssueActions, Widget):
     DEFAULT_CSS = """
     IssueList #search { dock: top; display: none; }
     IssueList.-searching #search { display: block; }
@@ -85,6 +87,7 @@ class IssueList(Widget):
     IssueList.-refreshing #refreshing { display: block; }
     """
     BINDINGS = [
+        *WRITE_BINDINGS,
         Binding("slash", "search", "Search"),
         Binding("escape", "clear_search", "Clear search", show=False),
         Binding("f", "focus_status(1)", "Focus status"),
@@ -110,6 +113,7 @@ class IssueList(Widget):
         store: IssueStore,
         details: dict[str, IssueDetail],
         mover: Mover,
+        writer: Writer,
         *,
         id: str,
     ) -> None:
@@ -119,6 +123,8 @@ class IssueList(Widget):
         self.store = store
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
+        self.writer = writer  # the app's, shared by every view
+        self._read_again = False  # a reload was asked for during a refresh
         self.rules = StatusRules(config)
         self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
         # Each table row's group, and its issue's row (None for a header or the empty message).
@@ -146,6 +152,7 @@ class IssueList(Widget):
     def on_mount(self) -> None:
         self.query_one(DataTable).add_columns(*COLUMNS)
         self.mover.changed.subscribe(self, self._on_moved)
+        self.writer.changed.subscribe(self, self._on_written)
         if self.store.issues:
             self.show()
         self.reload()
@@ -170,8 +177,9 @@ class IssueList(Widget):
         self.reload()
 
     def reload(self) -> None:
-        """Refresh from GitHub in the background, unless a refresh is already running."""
+        """Refresh from GitHub in the background; during a refresh, read again after it."""
         if self.refreshing:
+            self._read_again = True
             return
         self.refreshing = True
         self.run_worker(self._load())
@@ -180,9 +188,15 @@ class IssueList(Widget):
         try:
             while True:
                 with_done, config = self.state.show_done, self.config
+                self._read_again = False
                 await self.store.refresh(self._read(with_done))
-                if (with_done or not self.state.show_done) and config is self.config:
-                    break  # otherwise done was shown or the config changed mid-read; read again
+                if (
+                    (with_done or not self.state.show_done)
+                    and config is self.config
+                    and not self._read_again
+                ):
+                    break  # otherwise done was shown, the config changed or a reload was
+                    # asked for mid-read; read again
         except GitHubError as e:
             self.error = f"Couldn't refresh: {e}"
             title = f"Couldn't refresh {self.LABEL}"
@@ -297,7 +311,13 @@ class IssueList(Widget):
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
             IssueDetailScreen(
-                self.github, self.details, self.issues, index, self.select, self.mover
+                self.github,
+                self.details,
+                self.issues,
+                index,
+                self.select,
+                self.mover,
+                self.writer,
             )
         )
 
@@ -310,6 +330,12 @@ class IssueList(Widget):
     def _on_moved(self, _: Issue) -> None:
         self.store.apply_moves()
         self.show()
+
+    def _on_written(self, written: Written) -> None:
+        if self.store.update(written.detail.issue, written.sent_at):
+            self.show()
+        elif written.regroups:  # only this tab's search knows whether it belongs here now
+            self.reload()
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""
@@ -377,3 +403,9 @@ class IssueList(Widget):
 
     def action_repo_filter(self) -> None:
         self.state = self.state.cycle_repo(self.config.repo_names)
+
+
+def bound_keys() -> set[str]:
+    """Every key a list or the detail binds, which a status shortcut can't take over."""
+    bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS]
+    return set(BindingsMap(bindings).key_to_bindings)

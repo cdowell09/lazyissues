@@ -14,6 +14,7 @@ from lazyissues import clipboard
 from lazyissues import config as config_module
 from lazyissues.config import Config, ConfigError, SavedFilter
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.forms.form import FORM_KEYS
 from lazyissues.github import Gateway
 from lazyissues.keys import KeysScreen
 from lazyissues.models import IssueDetail
@@ -36,6 +37,7 @@ from lazyissues.views.milestones import Milestones
 from lazyissues.views.my_work import MyWork
 from lazyissues.views.team import Team
 from lazyissues.views.unassigned import Unassigned
+from lazyissues.writer import WRITE_BINDINGS, Writer
 
 # What the mouse does, for the `?` help: its gestures aren't bindings, so they are listed here.
 MOUSE = [
@@ -84,6 +86,7 @@ class LazyIssuesApp(App[None]):
         self.details: dict[str, IssueDetail] = {}  # by issue key; every view's detail cache
         self.moves = MoveTracker()  # every view's store shares it
         self.mover = Mover(self, github, StatusRules(config), self.moves, self.details)
+        self.writer = Writer(self, github, config, self.moves, self.mover, self.details)
         self.tab_titles: list[str] = []  # set by compose
 
     def store(self, view: str) -> IssueStore:
@@ -96,7 +99,9 @@ class LazyIssuesApp(App[None]):
     def tabs(self) -> list[tuple[str, Widget]]:
         def view(cls: type[IssueList], id: str) -> tuple[str, Widget]:
             store = self.store(id)
-            return cls.LABEL, cls(self.config, self.github, store, self.details, self.mover, id=id)
+            return cls.LABEL, cls(
+                self.config, self.github, store, self.details, self.mover, self.writer, id=id
+            )
 
         filters = Filters(self.config.filters, self.filter_results, self.save_filters, id="filters")
         return [
@@ -110,7 +115,9 @@ class LazyIssuesApp(App[None]):
     def filter_results(self, query: str) -> FilterResults:
         """The results list of a saved filter's query, with its own snapshot."""
         store = self.store(results_id(query))
-        return FilterResults(query, self.config, self.github, store, self.details, self.mover)
+        return FilterResults(
+            query, self.config, self.github, store, self.details, self.mover, self.writer
+        )
 
     def save_filters(self, filters: list[SavedFilter]) -> None:
         """Keep `filters` as the saved filters, in the config file too when there is one."""
@@ -168,6 +175,7 @@ class LazyIssuesApp(App[None]):
         self.save_config(config)
         self.theme = config.preferences.theme
         self.mover.rules = StatusRules(config)  # status keys and order
+        self.writer.config = config  # the roster to assign from, the statuses to create in
         for view in self.screen_stack[0].query(IssueList):
             view.configure(config)
 
@@ -185,6 +193,8 @@ class LazyIssuesApp(App[None]):
                     ("Moving in lists", DataTable.BINDINGS),
                     ("Issue detail", IssueDetailScreen.BINDINGS),
                     ("Status shortcuts, in lists and the detail", shortcuts),
+                    ("Writing, in lists and the detail", WRITE_BINDINGS),
+                    ("Comment, assign, create and edit forms", FORM_KEYS),
                     ("Move picker", MovePicker.BINDINGS),
                     ("Rejected move", RejectedMoveBanner.BINDINGS),
                     ("Filters", Filters.BINDINGS),

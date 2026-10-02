@@ -16,7 +16,7 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Moves change an issue only after GitHub confirms them
 - Bulk move and assign, skipping issues that can't make the change and listing why
 - Sub-issues nested under their parent; milestone progress bars
-- Markdown rendering, activity timeline, `$EDITOR` support
+- Markdown rendering, activity timeline, `$EDITOR` support for comments and bodies
 - Keyboard or mouse, including drag-to-select and copy
 - macOS, Linux and Windows
 
@@ -77,6 +77,10 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `R` | lists | show one repo at a time, then all |
 | `m` | lists, detail | move the issue: pick a status, a close reason, or reopen |
 | a status's `key` | lists, detail | open the move picker on that status; the uppercase key moves at once |
+| `C` | lists, detail | comment on the issue |
+| `a` | lists, detail | assign: pick from the team roster and the repo's assignable users |
+| `c` | lists, detail | create an issue |
+| `e` | lists, detail | edit the issue's title, body, labels and milestone |
 | `←` `→` | detail | previous or next issue in the list underneath |
 | `z` | detail | toggle full screen |
 | `o` | detail | open the issue in your browser |
@@ -123,6 +127,17 @@ The issue keeps its status until GitHub confirms the move; the list and detail s
 - **Theme**: any of Textual's built-in themes, previewed as you move through the list
 
 `ctrl+s` saves to `config.toml`, keeping your comments, and applies everything at once: lists regroup, the Team tab reloads its roster. `esc` cancels and puts the saved theme back.
+
+
+## Writing
+
+`C` comments, `a` assigns, `c` creates and `e` edits, from any list or the detail. In a form, `Enter` submits (or `Ctrl+S` anywhere), `Esc` cancels, and `Shift+Enter` or `Ctrl+J` starts a new line in a text box; pasting keeps its lines. `Ctrl+E` (or the Editor button) opens the text box in `$VISUAL`, else `$EDITOR`, else notepad on Windows and vi elsewhere, and brings the text back for you to review before submitting.
+
+- **Assign** lists your team roster first, then everyone the repo can assign; type to filter, `Space` to pick. Only the people you add or remove change.
+- **Create** starts in the repo you last created in, else the selected issue's. Its status is set as a move once the issue exists: the status label in a label-backed repo, or the project's Status in a project-backed one. If GitHub rejects that, the issue is still created and the rejected move stays on screen.
+- **Edit** starts from GitHub's latest copy and sends only the fields you changed.
+
+If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
 
 ## Cache
 

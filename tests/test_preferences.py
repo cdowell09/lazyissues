@@ -103,7 +103,10 @@ async def highlight_theme(pilot: Pilot, theme: str) -> None:
     themes = pilot.app.screen.query_one("#theme", OptionList)
     themes.focus()
     themes.highlighted = themes.get_option_index(theme)
-    await pilot.pause()
+    for _ in range(100):  # the preview follows a message, which can lag on slow CI
+        await pilot.pause()
+        if pilot.app.theme == theme:
+            return
 
 
 async def test_saving_preferences_writes_config_and_applies_them_at_once(tmp_path):
@@ -219,6 +222,19 @@ async def test_preferences_stay_open_until_pinned_milestones_and_keys_make_sense
         assert app.screen is screen
         assert screen.query_one(StatusList).statuses == demo.config().statuses
         assert not (tmp_path / "config.toml").exists()
+
+
+async def test_a_status_key_the_lists_already_bind_is_warned_about(tmp_path):
+    app = LazyIssuesApp(demo.config(), demo.github(), config_path=tmp_path / "config.toml")
+    async with app.run_test(size=(100, 60), notifications=True) as pilot:
+        await settled(pilot)
+        screen = await open_preferences(pilot)
+        screen.query_one(StatusList).focus()
+        screen.query_one("#key", Input).focus()
+        await pilot.press("c")  # `c` creates an issue in the lists and the detail
+        await pilot.pause()
+        toasts = [str(toast.render()) for toast in app.screen.query("Toast")]
+        assert any("c is already a key" in toast for toast in toasts)
 
 
 async def test_saving_preferences_keeps_filters_saved_earlier(tmp_path):

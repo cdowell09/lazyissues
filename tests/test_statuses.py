@@ -107,6 +107,13 @@ def test_status_labels_only_exist_in_label_backed_repos():
     assert rules.status_labels(issue("a/board", labels=("todo",))) == []
 
 
+def test_ordinary_labels_leave_out_status_labels_only_where_labels_are_the_source():
+    rules = StatusRules(CONFIG)
+    labels = ["bug", "todo", "In-Review", "docs"]
+    assert rules.ordinary_labels(Repo("a/labels"), labels) == ["bug", "docs"]
+    assert rules.ordinary_labels(Repo("a/board", "project", "a/7"), labels) == labels
+
+
 def test_shortcuts_map_lowercase_keys_to_statuses():
     config = Config(repos=[], statuses=[Status("Todo"), Status("In Progress", key="P")])
     assert StatusRules(config).shortcuts() == {"p": "In Progress"}

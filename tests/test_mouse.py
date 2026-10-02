@@ -312,7 +312,7 @@ async def test_preferences_options_checkboxes_and_buttons_are_clickable():
         preferences = app.screen
         theme = sorted(app.available_themes)[0]
         await click_option(pilot, preferences.query_one("#theme", OptionList), 0)
-        assert app.theme == theme  # previewed
+        await until(pilot, lambda: app.theme == theme)  # previewed; the message can lag on CI
         await click_option(pilot, preferences.query_one(StatusList), 0)  # Todo, now active
         await pilot.click("#show-done")
         await pilot.click("Button.-primary")  # Save
@@ -350,3 +350,29 @@ async def test_setup_checkboxes_and_buttons_are_clickable(tmp_path):
         await pilot.click("#next")
         await settled(pilot)
         assert isinstance(app.screen, SourcesScreen)
+
+
+async def test_forms_take_clicks_and_copy_selected_text():
+    copied: list[str] = []
+    github = demo.github()
+    app = LazyIssuesApp(demo.config(), github, system_clipboard=copied.append)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await settled(pilot)
+        await click_row(pilot, 1)  # lanternfish#9, assigned to octo-dev
+        await pilot.press("a")
+        await settled(pilot)
+        form = app.screen
+
+        label = form.query_one("Label")
+        await drag(pilot, label, (0, 0), (8, 0))  # "Assignees"
+        await pilot.pause()
+        assert copy_key(app) is not None
+        await pilot.press("ctrl+c")
+        assert copied == ["Assignees"]
+
+        await click_option(pilot, form.query_one(SelectionList), 0)  # sam-reef, the team
+        await pilot.click("#submit")
+        await settled(pilot)
+        assert not isinstance(app.screen, type(form))
+        assignees = (await github.issue_detail("octo-dev/lanternfish", 9)).issue.assignees
+        assert assignees == ("octo-dev", "sam-reef")

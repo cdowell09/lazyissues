@@ -12,6 +12,7 @@ from textual.widgets.option_list import Option
 
 from lazyissues.config import Config, Preferences, is_milestone_key
 from lazyissues.status_list import StatusList
+from lazyissues.views.issue_list import bound_keys
 
 
 class PreferencesScreen(ModalScreen[Config | None]):
@@ -84,13 +85,21 @@ class PreferencesScreen(ModalScreen[Config | None]):
 
     def on_mount(self) -> None:
         themes = self.query_one("#theme", OptionList)
-        themes.highlighted = themes.get_option_index(self.config.preferences.theme)
+        # Quietly: the theme already shows, and a late preview of it could undo the
+        # user's first move through the list.
+        with themes.prevent(OptionList.OptionHighlighted):
+            themes.highlighted = themes.get_option_index(self.config.preferences.theme)
         self._show_key()
 
     @on(OptionList.OptionHighlighted, "#theme")
     def preview_theme(self, event: OptionList.OptionHighlighted) -> None:
-        assert event.option.id is not None
-        self.app.theme = event.option.id
+        # The highlight as it is now, not the event's: an event that arrives late (a slow
+        # machine) mustn't preview a theme the highlight has already left.
+        themes = event.option_list
+        if themes.highlighted is not None:
+            theme = themes.get_option_at_index(themes.highlighted).id
+            assert theme is not None
+            self.app.theme = theme
 
     @on(StatusList.SelectionHighlighted)
     def _show_key(self) -> None:
@@ -105,6 +114,12 @@ class PreferencesScreen(ModalScreen[Config | None]):
         key = event.value.strip() or None
         if owner := self.query_one(StatusList).set_key(key):
             self.notify(f"{key} already moves to {owner}.", severity="warning")
+        elif key and {key.lower(), key.upper()} & bound_keys():
+            self.notify(
+                f"{key} is already a key in the lists and the detail, so this shortcut"
+                " won't work there.",
+                severity="warning",
+            )
 
     def action_save(self) -> None:
         team = _lines(self.query_one("#team", TextArea).text)

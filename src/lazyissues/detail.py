@@ -21,6 +21,7 @@ from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Event, EventKind, Issue, IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.store import now
+from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 
 _ACTIONS: dict[EventKind, str] = {
     "commented": "commented",
@@ -91,7 +92,7 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     return widgets
 
 
-class IssueDetailScreen(ModalScreen[None]):
+class IssueDetailScreen(IssueActions, ModalScreen[None]):
     """Shows `issues[index]`, from `details` at once, and refetches it every time.
 
     `details` is a cache shared by every view and updated with each fetch.
@@ -99,6 +100,7 @@ class IssueDetailScreen(ModalScreen[None]):
 
     AUTO_FOCUS = "#detail"  # so up/down and page keys scroll it
     BINDINGS = [
+        *WRITE_BINDINGS,
         # Priority, or the scrolling body would take the arrows for horizontal scrolling.
         Binding("left", "step(-1)", "Previous", priority=True),
         Binding("right", "step(1)", "Next", priority=True),
@@ -138,12 +140,14 @@ class IssueDetailScreen(ModalScreen[None]):
         index: int,
         select: Callable[[Issue], None],
         mover: Mover,
+        writer: Writer,
     ) -> None:
         super().__init__()
         self.github = github
         self.details = details
         self.issues = list(issues)
         self.mover = mover
+        self.writer = writer
         self.index = index
         self.select = select
         self.showing_activity = False
@@ -160,11 +164,12 @@ class IssueDetailScreen(ModalScreen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.mover.changed.subscribe(self, self.on_moved)
+        self.mover.changed.subscribe(self, self.on_changed)
+        self.writer.changed.subscribe(self, lambda written: self.on_changed(written.detail.issue))
         self.show_issue()
 
-    def on_moved(self, moved: Issue) -> None:
-        self.issues = [moved if issue.key == moved.key else issue for issue in self.issues]
+    def on_changed(self, changed: Issue) -> None:
+        self.issues = [changed if issue.key == changed.key else issue for issue in self.issues]
         self.refresh_content()
 
     def show_issue(self) -> None:
@@ -197,9 +202,13 @@ class IssueDetailScreen(ModalScreen[None]):
         except GitHubError as e:
             self.error = f"Couldn't load {issue.ref}: {e}"
         else:  # a move confirmed since the fetch was sent keeps its status (ADR 0003)
-            moved = self.mover.moves.settle(detail.issue, requested_at)
-            self.details[issue.key] = replace(detail, issue=moved)
+            if not self.writer.written_since(issue.key, requested_at):  # else it's stale
+                moved = self.mover.moves.settle(detail.issue, requested_at)
+                self.details[issue.key] = replace(detail, issue=moved)
         self.refresh_content()
+
+    def selected(self) -> Issue:
+        return self.issue
 
     def action_step(self, delta: int) -> None:
         index = self.index + delta

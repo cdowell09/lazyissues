@@ -82,9 +82,19 @@ class StatusRules:
         """The statuses a move can give `issue`: every configured status in a label-backed
         repo; in a project-backed one, the project's options (pass them in board order)
         except those meaning done, named as configured where they match."""
-        if self.repo_of(issue).project is None:
+        return self.offered(self.repo_of(issue), project_options)
+
+    def offered(self, repo: Repo, project_options: Sequence[str]) -> list[str]:
+        """The statuses `repo`'s status source offers, as `reachable` lists them."""
+        if repo.project is None:
             return [status.name for status in self._statuses.values()]
         return [self._name(option) for option in project_options if not is_done_option(option)]
+
+    def ordinary_labels(self, repo: Repo, labels: Sequence[str]) -> list[str]:
+        """`labels` without `repo`'s status labels, which only a move may change."""
+        if repo.project is not None:
+            return list(labels)  # in a project-backed repo every label is ordinary
+        return [label for label in labels if normalize(label) not in self._statuses]
 
     def shortcuts(self) -> dict[str, str]:
         """Each status's move shortcut, lowercase, to the status's name."""

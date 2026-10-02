@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 
 
 @dataclass(frozen=True)
@@ -134,3 +134,11 @@ class Project:
     ref: str  # "owner/number", as config's `project`
     title: str
     status_options: tuple[str, ...] = ()  # its Status field's options, in board order
+
+
+class IssueChanges(TypedDict, total=False):
+    """The fields an edit changes; a field left out stays as it is on GitHub."""
+
+    title: str
+    body: str
+    milestone: str | None  # None removes it

@@ -1,5 +1,6 @@
 """The GitHub gateway: the only code that talks to GitHub (ADR 0002)."""
 
+import asyncio
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from lazyissues.models import (
     Event,
     EventKind,
     Issue,
+    IssueChanges,
     IssueDetail,
     Milestone,
     Project,
@@ -44,6 +46,8 @@ class Gateway(Protocol):
 
     async def repo_milestones(self, repo: str) -> list[Milestone]: ...
 
+    async def assignable_users(self, repo: str) -> list[str]: ...
+
     async def project_status_options(self, project: str) -> list[str]:
         """The Status field's options of project "owner/number", in board order."""
         ...
@@ -71,6 +75,30 @@ class Gateway(Protocol):
     async def reopen_issue(self, repo: str, number: int) -> None: ...
 
     async def assign(self, repo: str, number: int, login: str) -> None: ...
+
+    # These writes return the issue's detail as GitHub has it once the write is done.
+
+    async def comment(self, repo: str, number: int, body: str) -> IssueDetail: ...
+
+    async def change_assignees(
+        self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]
+    ) -> IssueDetail:
+        """Add and remove assignees by login, leaving any others as they are on GitHub."""
+        ...
+
+    async def create_issue(
+        self,
+        repo: str,
+        title: str,
+        *,
+        body: str = "",
+        labels: Sequence[str] = (),
+        milestone: str | None = None,
+    ) -> IssueDetail: ...
+
+    async def update_issue(self, repo: str, number: int, changes: IssueChanges) -> IssueDetail:
+        """Change only the fields in `changes`, so edits made meanwhile to others stay."""
+        ...
 
 
 def gh_token() -> str:
@@ -115,45 +143,43 @@ query($q: String!, $after: String) {
     + _ISSUE_FIELDS
 )
 
+# Every query or mutation that builds an `IssueDetail` selects these fields, so `_detail`
+# can read them; writes return them so the app shows GitHub's copy after each change.
 # `last: 100` keeps the newest activity of a long issue, still oldest first. The project
 # items here merge with those in `IssueFields`, adding every field's value.
-_DETAIL = (
+_DETAIL_FIELDS = (
     """
-query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      ...IssueFields
-      body
-      parent { ...IssueFields }
-      subIssues(first: 50) { nodes { ...IssueFields } }
-      projectItems(first: 10) {
+fragment DetailFields on Issue {
+  ...IssueFields
+  body
+  parent { ...IssueFields }
+  subIssues(first: 50) { nodes { ...IssueFields } }
+  projectItems(first: 10) {
+    nodes {
+      project { title }
+      fieldValues(first: 30) {
         nodes {
-          project { title }
-          fieldValues(first: 30) {
-            nodes {
-              ... on ProjectV2ItemFieldSingleSelectValue { name field { ...FieldName } }
-              ... on ProjectV2ItemFieldIterationValue { title field { ...FieldName } }
-            }
-          }
+          ... on ProjectV2ItemFieldSingleSelectValue { name field { ...FieldName } }
+          ... on ProjectV2ItemFieldIterationValue { title field { ...FieldName } }
         }
       }
-      timelineItems(last: 100, itemTypes: [
-        ISSUE_COMMENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
-        MILESTONED_EVENT, DEMILESTONED_EVENT, CLOSED_EVENT, REOPENED_EVENT
-      ]) {
-        nodes {
-          __typename
-          ... on IssueComment { actor: author { login } createdAt body }
-          ... on LabeledEvent { actor { login } createdAt label { name } }
-          ... on UnlabeledEvent { actor { login } createdAt label { name } }
-          ... on AssignedEvent { actor { login } createdAt assignee { ...Login } }
-          ... on UnassignedEvent { actor { login } createdAt assignee { ...Login } }
-          ... on MilestonedEvent { actor { login } createdAt milestoneTitle }
-          ... on DemilestonedEvent { actor { login } createdAt milestoneTitle }
-          ... on ClosedEvent { actor { login } createdAt stateReason }
-          ... on ReopenedEvent { actor { login } createdAt }
-        }
-      }
+    }
+  }
+  timelineItems(last: 100, itemTypes: [
+    ISSUE_COMMENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
+    MILESTONED_EVENT, DEMILESTONED_EVENT, CLOSED_EVENT, REOPENED_EVENT
+  ]) {
+    nodes {
+      __typename
+      ... on IssueComment { actor: author { login } createdAt body }
+      ... on LabeledEvent { actor { login } createdAt label { name } }
+      ... on UnlabeledEvent { actor { login } createdAt label { name } }
+      ... on AssignedEvent { actor { login } createdAt assignee { ...Login } }
+      ... on UnassignedEvent { actor { login } createdAt assignee { ...Login } }
+      ... on MilestonedEvent { actor { login } createdAt milestoneTitle }
+      ... on DemilestonedEvent { actor { login } createdAt milestoneTitle }
+      ... on ClosedEvent { actor { login } createdAt stateReason }
+      ... on ReopenedEvent { actor { login } createdAt }
     }
   }
 }
@@ -163,6 +189,19 @@ fragment Login on Assignee { ... on Actor { login } }
 """
     + _ISSUE_FIELDS
 )
+
+_DETAIL = (
+    """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { ...DetailFields } }
+}
+"""
+    + _DETAIL_FIELDS
+)
+
+_REPO_ID = """
+query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }
+"""
 
 # What every write needs: the IDs of the issue and its repo, and the issue's labels and
 # project items.
@@ -195,6 +234,16 @@ query($login: String!, $number: Int!) {
 
 _USER = "query($login: String!) { user(login: $login) { id } }"
 
+_ASSIGNABLE_USERS = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    assignableUsers(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { login }
+    }
+  }
+}
+"""
 
 # The activity kind of each timeline item type, and where its text lives.
 _EVENTS: dict[str, tuple[EventKind, Callable[[dict[str, Any]], str | None]]] = {
@@ -248,7 +297,7 @@ query($owner: String!, $name: String!, $after: String) {
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        title
+        id title
         open: issues(states: OPEN) { totalCount }
         closed: issues(states: CLOSED) { totalCount }
       }
@@ -256,6 +305,12 @@ query($owner: String!, $name: String!, $after: String) {
   }
 }
 """
+
+
+def _known(ids: dict[str, str], name: str, missing: str) -> str:
+    if name not in ids:
+        raise GitHubError(missing)
+    return ids[name]
 
 
 def _login(actor: dict[str, Any] | None) -> str:
@@ -407,13 +462,9 @@ class GraphQLGateway:
 
     async def repo_milestones(self, repo: str) -> list[Milestone]:
         """`repo`'s open milestones, soonest due first, with their issue counts."""
-        owner, name = repo.split("/")
-        nodes = await self._nodes(
-            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
-        )
         return [
             Milestone(repo, node["title"], node["open"]["totalCount"], node["closed"]["totalCount"])
-            for node in nodes
+            for node in await self._milestones(repo)
         ]
 
     async def project_status_options(self, project: str) -> list[str]:
@@ -477,22 +528,106 @@ class GraphQLGateway:
     async def reopen_issue(self, repo: str, number: int) -> None:
         await self._mutate("reopenIssue", {"issueId": await self._issue_id(repo, number)})
 
+    async def assignable_users(self, repo: str) -> list[str]:
+        owner, name = repo.split("/", 1)
+        users = await self._nodes(
+            _ASSIGNABLE_USERS,
+            lambda d: d["repository"]["assignableUsers"],
+            owner=owner,
+            name=name,
+        )
+        return [user["login"] for user in users]
+
+    async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
+        fields = {"subjectId": await self._issue_id(repo, number), "body": body}
+        return await self._write("addComment", fields, "subject")
+
     async def assign(self, repo: str, number: int, login: str) -> None:
         issue_id = await self._issue_id(repo, number)
+        await self._mutate(
+            "addAssigneesToAssignable",
+            {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]},
+        )
+
+    async def change_assignees(
+        self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]
+    ) -> IssueDetail:
+        issue_id, *user_ids = await asyncio.gather(
+            self._issue_id(repo, number), *(self._user_id(login) for login in [*add, *remove])
+        )
+        steps = [
+            (mutation, ids)
+            for mutation, ids in (
+                ("addAssigneesToAssignable", user_ids[: len(add)]),
+                ("removeAssigneesFromAssignable", user_ids[len(add) :]),
+            )
+            if ids
+        ]
+        detail = None
+        for mutation, ids in steps:
+            try:
+                detail = await self._write(
+                    mutation, {"assignableId": issue_id, "assigneeIds": ids}, "assignable"
+                )
+            except GitHubError as e:
+                if detail is not None:  # the add went through; say so, or it looks undone
+                    added, missed = ", ".join(add), ", ".join(remove)
+                    raise GitHubError(f"Added {added}, but couldn't remove {missed}: {e}") from e
+                raise
+        return detail or await self.issue_detail(repo, number)
+
+    async def _user_id(self, login: str) -> str:
         user = (await self._query(_USER, login=login))["user"]
         if user is None:
             raise GitHubError(f"No GitHub user {login}.")
-        await self._mutate(
-            "addAssigneesToAssignable", {"assignableId": issue_id, "assigneeIds": [user["id"]]}
-        )
+        return user["id"]
+
+    async def create_issue(
+        self,
+        repo: str,
+        title: str,
+        *,
+        body: str = "",
+        labels: Sequence[str] = (),
+        milestone: str | None = None,
+    ) -> IssueDetail:
+        owner, name = repo.split("/", 1)
+        repository = (await self._query(_REPO_ID, owner=owner, name=name))["repository"]
+        fields = {
+            "repositoryId": repository["id"],
+            "title": title,
+            "body": body,
+            "labelIds": await self._label_ids(repo, labels),
+            "milestoneId": await self._milestone_id(repo, milestone),
+        }
+        return await self._write("createIssue", fields, "issue")
+
+    async def update_issue(self, repo: str, number: int, changes: IssueChanges) -> IssueDetail:
+        fields: dict[str, Any] = {"id": await self._issue_id(repo, number)}
+        if "title" in changes:
+            fields["title"] = changes["title"]
+        if "body" in changes:
+            fields["body"] = changes["body"]
+        if "milestone" in changes:  # None removes it
+            fields["milestoneId"] = await self._milestone_id(repo, changes["milestone"])
+        return await self._write("updateIssue", fields, "issue")
 
     async def _mutate(
-        self, mutation: str, fields: dict[str, Any], returning: str = "clientMutationId"
+        self,
+        mutation: str,
+        fields: dict[str, Any],
+        returning: str = "clientMutationId",
+        fragments: str = "",
     ) -> dict[str, Any]:
         """Run `mutation` with `fields` as its input, selecting `returning`."""
         kind = mutation[0].upper() + mutation[1:]
         query = f"mutation($input: {kind}Input!) {{ {mutation}(input: $input) {{ {returning} }} }}"
-        return (await self._query(query, input=fields))[mutation]
+        return (await self._query(query + fragments, input=fields))[mutation]
+
+    async def _write(self, mutation: str, fields: dict[str, Any], issue: str) -> IssueDetail:
+        """Run `mutation`, and build the issue's detail from its payload's `issue` field."""
+        returning = f"{issue} {{ ...DetailFields }}"
+        return _detail((await self._mutate(mutation, fields, returning, _DETAIL_FIELDS))[issue])
 
     async def _labels(self, repo: str) -> list[dict[str, Any]]:
         """Every label of `repo`, with its ID."""
@@ -500,6 +635,25 @@ class GraphQLGateway:
         return await self._nodes(
             _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
         )
+
+    async def _milestones(self, repo: str) -> list[dict[str, Any]]:
+        """Every open milestone of `repo`, soonest due first, with its ID."""
+        owner, name = repo.split("/", 1)
+        return await self._nodes(
+            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
+        )
+
+    async def _label_ids(self, repo: str, labels: Sequence[str]) -> list[str]:
+        if not labels:
+            return []
+        ids = {label["name"]: label["id"] for label in await self._labels(repo)}
+        return [_known(ids, label, f"{repo} has no label {label!r}.") for label in labels]
+
+    async def _milestone_id(self, repo: str, milestone: str | None) -> str | None:
+        if milestone is None:
+            return None
+        ids = {m["title"]: m["id"] for m in await self._milestones(repo)}
+        return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
         owner, name = repo.split("/", 1)
