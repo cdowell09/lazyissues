@@ -16,11 +16,13 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, OptionList, Static
 
+from lazyissues import search
 from lazyissues.config import Config, SavedFilter
 from lazyissues.github import Gateway
 from lazyissues.models import IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.store import IssueStore
+from lazyissues.view_model import ViewState
 from lazyissues.views.issue_list import IssueList
 
 
@@ -44,6 +46,8 @@ class FilterResults(IssueList):
     ) -> None:
         super().__init__(config, github, store, details, mover, id=results_id(query))
         self.saved_query = query  # GitHub search syntax, as the user wrote it
+        if search.asks_for_closed(query):  # its closed issues are what the user asked for
+            self.set_reactive(IssueList.state, ViewState(show_done=True))
 
     async def queries(self) -> list[str]:
         return [f"is:issue {self.saved_query}"]

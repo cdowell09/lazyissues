@@ -1,6 +1,6 @@
 from datetime import date
 
-from lazyissues.search import scoped, with_states
+from lazyissues.search import asks_for_closed, scoped, with_states
 
 
 def test_scopes_to_repo_set():
@@ -21,5 +21,12 @@ def test_reads_open_issues_and_those_closed_since_a_date():
 
 
 def test_keeps_a_query_that_names_its_own_state():
-    for query in ("is:closed label:bug", "bug is:open", "state:closed"):
+    for query in ("is:closed label:bug", "bug is:open", "state:closed", "-is:open"):
         assert with_states(query, date(2026, 9, 18)) == [query]
+
+
+def test_knows_a_query_that_asks_for_closed_issues():
+    for query in ("is:closed", "label:bug state:closed", "-is:open", "-state:open"):
+        assert asks_for_closed(query)
+    for query in ("label:bug", "is:open", "state:open", "is:issue"):
+        assert not asks_for_closed(query)

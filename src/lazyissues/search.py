@@ -3,7 +3,8 @@
 from datetime import date
 
 _SCOPE_QUALIFIERS = ("repo:", "org:", "user:")
-_STATE_QUALIFIERS = ("is:open", "is:closed", "state:")
+_STATE_QUALIFIERS = ("is:open", "is:closed", "state:", "-is:open", "-is:closed", "-state:")
+_CLOSED_QUALIFIERS = ("is:closed", "state:closed", "-is:open", "-state:open")
 
 
 def scoped(query: str, repos: list[str]) -> str:
@@ -22,6 +23,11 @@ def with_states(query: str, closed_since: date | None) -> list[str]:
     if closed_since is not None:
         searches.append(f"{query} is:closed closed:>={closed_since.isoformat()}")
     return searches
+
+
+def asks_for_closed(query: str) -> bool:
+    """Whether `query` names a state that reads closed issues."""
+    return _names(query, _CLOSED_QUALIFIERS)
 
 
 def _names(query: str, qualifiers: tuple[str, ...]) -> bool:

@@ -119,10 +119,14 @@ async def test_a_query_with_its_own_repo_and_state_runs_as_written():
         await open_filters(pilot)
         assert firsts(app) == ["Todo (1)", "lanternfish#13"]
 
-        await pilot.press("down", "enter", "tab", "d")
+        await pilot.press("down", "enter")
         await settled(pilot)
-        # Closed 2 and 40 days ago: the query's own `is:closed` replaces the done window.
+        # Shown without `d`, and closed 2 and 40 days ago: the query's own `is:closed`
+        # replaces the done window.
         assert firsts(app) == ["Done (2)", "tidepool#10", "lanternfish#2"]
+
+        await pilot.press("tab", "d")  # `d` still hides them
+        assert firsts(app) == [""]
 
 
 async def test_an_invalid_query_shows_githubs_error_and_the_app_carries_on():
