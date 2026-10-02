@@ -97,6 +97,21 @@ def test_fold_all_folds_every_group_then_unfolds_them_all():
     assert [rows for _, _, rows in shown(folded.fold_all(names))] == [[4], [1, 3], [2]]
 
 
+def test_toggling_selects_issues_and_toggling_them_all_again_unselects_them():
+    state = ViewState().toggle_selected(["a/x#1"])
+    assert state.selected == {"a/x#1"}
+    todo = ["a/x#1", "a/y#3"]
+    state = state.toggle_selected(todo)  # some were unselected: now all are
+    assert state.selected == {"a/x#1", "a/y#3"}
+    assert state.toggle_selected(todo).selected == set()
+
+
+def test_a_folded_group_still_has_its_issues_to_select():
+    state = ViewState().toggle_fold("Todo")
+    groups = visible_groups(ISSUES, by_status(RULES), RULES, state)
+    assert [[i.number for i in g.issues] for g in groups] == [[4], [1, 3], [2]]
+
+
 def test_focus_cycles_through_the_statuses_shown_then_back_to_all():
     options = focusable_statuses(ISSUES, RULES, ViewState(focus="Todo", repo="a/y"))
     assert options == ["Todo", "In Progress"]  # focus itself doesn't narrow the choice

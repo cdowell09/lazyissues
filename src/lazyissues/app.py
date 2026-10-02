@@ -12,6 +12,7 @@ from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
 from lazyissues import clipboard
 from lazyissues import config as config_module
+from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.config import Config, ConfigError, SavedFilter
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.forms.form import FORM_KEYS
@@ -46,6 +47,7 @@ MOUSE = [
     Binding("wheel", "", "Scroll", key_display="wheel"),
     Binding("drag", "", "Select text, then ctrl+c or Copy copies it"),
     Binding("[×]", "", "Close the issue detail"),
+    Binding("☐", "", "Select an issue, or on a group header its group", key_display="click ☐"),
 ]
 
 
@@ -197,6 +199,9 @@ class LazyIssuesApp(App[None]):
                     ("Comment, assign, create and edit forms", FORM_KEYS),
                     ("Move picker", MovePicker.BINDINGS),
                     ("Rejected move", RejectedMoveBanner.BINDINGS),
+                    ("Bulk action menus", BulkMenu.BINDINGS),
+                    ("Confirming a bulk action", BulkConfirm.BINDINGS),
+                    ("Bulk action summary", BulkSummary.BINDINGS),
                     ("Filters", Filters.BINDINGS),
                     ("Filter form", FilterForm.BINDINGS),
                     ("Deleting a filter", ConfirmDelete.BINDINGS),

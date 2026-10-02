@@ -6,7 +6,7 @@ confirmed.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -14,18 +14,20 @@ from textual.app import App
 from textual.binding import Binding
 from textual.signal import Signal
 
+from lazyissues.bulk import Outcome
 from lazyissues.config import Config
 from lazyissues.forms.assign import AssignForm
 from lazyissues.forms.comment import CommentForm
 from lazyissues.forms.create import CreateForm
 from lazyissues.forms.edit import EditForm
 from lazyissues.forms.form import Form, Written
-from lazyissues.github import Gateway
+from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
-from lazyissues.move_planner import MoveTo
+from lazyissues.move_planner import MoveTo, Skip
 from lazyissues.move_tracker import MoveTracker
 from lazyissues.mover import Mover
 from lazyissues.statuses import StatusRules
+from lazyissues.store import now
 
 
 class Writer:
@@ -74,15 +76,36 @@ class Writer:
         repo = next((name for name in candidates if name in repos), repos[0])
         self._open(CreateForm(self.github, self.config, repo), self._created)
 
+    async def assign_each(self, outcomes: Sequence[Outcome], login: str) -> list[Outcome]:
+        """Add `login` to the assignees of each issue `outcomes` plans for, keeping the
+        others, one by one, and show GitHub's copy of each as a saved assign form does;
+        with GitHub's error on each it refuses."""
+        done = []
+        for outcome in outcomes:
+            if not isinstance(outcome.plan, Skip):
+                issue, sent_at = outcome.issue, now()
+                try:
+                    detail = await self.github.change_assignees(
+                        issue.repo, issue.number, [login], []
+                    )
+                except GitHubError as e:
+                    outcome = replace(outcome, error=str(e))
+                else:
+                    self._show(self._settled(Written(detail, sent_at, AssignForm.REGROUPS)))
+            done.append(outcome)
+        return done
+
     def _open(self, form: Form, done: Callable[[Written], None] | None = None) -> None:
         def closed(written: Written | None) -> None:
-            if written is None:
-                return
-            # A move confirmed after the write was sent keeps its status (ADR 0003).
-            settled = self.moves.settle(written.detail.issue, written.sent_at)
-            (done or self._show)(replace(written, detail=replace(written.detail, issue=settled)))
+            if written is not None:
+                (done or self._show)(self._settled(written))
 
         self.app.push_screen(form, closed)
+
+    def _settled(self, written: Written) -> Written:
+        """`written` with the moves confirmed after it was sent applied (ADR 0003)."""
+        settled = self.moves.settle(written.detail.issue, written.sent_at)
+        return replace(written, detail=replace(written.detail, issue=settled))
 
     def _show(self, written: Written) -> None:
         key = written.detail.issue.key

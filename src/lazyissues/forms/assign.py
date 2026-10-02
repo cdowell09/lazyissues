@@ -10,6 +10,14 @@ from lazyissues.github import Gateway
 from lazyissues.models import Issue, IssueDetail
 
 
+def team_first(roster: Sequence[str], users: Sequence[str]) -> list[str]:
+    """The assignable `users`, those on the team `roster` first, each once and spelled as
+    GitHub spells it: logins ignore case."""
+    assignable = {user.casefold(): user for user in users}
+    team = [assignable[login.casefold()] for login in roster if login.casefold() in assignable]
+    return list(dict.fromkeys([*team, *users]))
+
+
 class AssignForm(Form):
     """Starts from GitHub's latest assignees and sends only who was added and who was
     removed, so an assignee someone else changed meanwhile stays as they left it."""
@@ -30,13 +38,8 @@ class AssignForm(Form):
             self.github.issue_detail(self.issue.repo, self.issue.number),
         )
         self.assignees = detail.issue.assignees
-        # The team comes first, spelled as GitHub spells it: logins ignore case.
-        assignable = {user.casefold(): user for user in users}
-        team = [
-            assignable[login.casefold()] for login in self.roster if login.casefold() in assignable
-        ]
         picker = self.query_one(Picker)
-        picker.set_items([*team, *users, *self.assignees], self.assignees)
+        picker.set_items([*team_first(self.roster, users), *self.assignees], self.assignees)
 
     async def save(self) -> IssueDetail | None:
         picked = self.query_one(Picker).selected

@@ -4,7 +4,7 @@ Pure, with no Textual, so every tab's grouping and filtering is unit-tested here
 the list widget only draws what `visible_groups` returns.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from lazyissues.models import Issue, Milestone
@@ -24,6 +24,7 @@ class ViewState:
     repo: str | None = None  # only this repo's issues show
     # Group names, and the keys of parent issues whose sub-issues are hidden.
     folded: frozenset[str] = frozenset()
+    selected: frozenset[str] = frozenset()  # issue keys, for a bulk action
 
     @property
     def filtering(self) -> bool:
@@ -33,6 +34,13 @@ class ViewState:
     def toggle_fold(self, name: str) -> "ViewState":
         """Fold or unfold a group by name, or a parent's sub-issues by its key."""
         return replace(self, folded=self.folded ^ {name})
+
+    def toggle_selected(self, keys: Iterable[str]) -> "ViewState":
+        """Select the issues `keys`, or unselect them when they are all selected."""
+        keys = frozenset(keys)
+        if keys <= self.selected:
+            return replace(self, selected=self.selected - keys)
+        return replace(self, selected=self.selected | keys)
 
     def fold_all(self, groups: list[str]) -> "ViewState":
         """Fold every group, or unfold them all when they are all folded."""
@@ -73,9 +81,13 @@ class Row:
 @dataclass(frozen=True)
 class Group:
     name: str
-    total: int  # matching issues, whether folded or not
+    issues: list[Issue]  # matching issues, whether folded or not
     rows: list[Row]  # empty when folded
     folded: bool = False
+
+    @property
+    def total(self) -> int:
+        return len(self.issues)
 
 
 def by_status(rules: StatusRules) -> Grouping:
@@ -143,7 +155,7 @@ def visible_groups(
             continue  # an empty member group shows unless a search names someone else
         folded = name in state.folded
         rows = [] if folded else _nested(members, state.folded)
-        groups.append(Group(name, len(members), rows, folded))
+        groups.append(Group(name, members, rows, folded))
     return groups
 
 
