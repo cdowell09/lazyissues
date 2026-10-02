@@ -15,5 +15,5 @@ uv run ruff format --check
 echo "pre-commit: ruff check"
 uv run ruff check
 
-echo "pre-commit: mypy"
-uv run mypy
+echo "pre-commit: ty check"
+uv run ty check

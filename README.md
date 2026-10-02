@@ -30,3 +30,7 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 ```bash
 uv tool install lazyissues
 ```
+
+## License
+
+[MIT](LICENSE)
