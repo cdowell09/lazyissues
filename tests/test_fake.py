@@ -5,7 +5,7 @@ import pytest
 from lazyissues import demo
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssueDetail
+from lazyissues.models import Issue, IssueDetail, Project
 
 
 async def test_fake_understands_the_queries_the_app_sends():
@@ -20,6 +20,8 @@ async def test_fake_understands_the_queries_the_app_sends():
     assert await numbers("no:assignee") == [18]
     assert await numbers("assignee:sam-reef repo:octo-dev/lanternfish") == [4, 7]
     assert await numbers('label:bug "tide table"') == [12]
+    # The fake knows no authors or commenters, so involvement is assignment.
+    assert await numbers("is:issue is:open involves:@me") == [12, 4, 9, 11]
 
 
 async def test_fake_returns_state_and_project_statuses_like_github():
@@ -59,3 +61,23 @@ async def test_fake_detail_of_an_issue_with_no_extras_is_empty():
 async def test_fake_detail_of_a_missing_issue_raises():
     with pytest.raises(GitHubError, match="Could not resolve"):
         await demo.github().issue_detail("octo-dev/tidepool", 999)
+
+
+async def test_fake_answers_viewer_and_repo_questions():
+    project = Project("o/1", "Board", ("Todo", "Done"))
+    github = FakeGitHub(viewer="me", labels={"o/r": ["bug"]}, projects={"o/r": [project]})
+    login, scopes = await github.whoami()
+    assert login == "me"
+    assert "project" in scopes
+    assert await github.repo_labels("o/r") == ["bug"]
+    assert await github.repo_projects("o/r") == [project]
+
+
+async def test_fake_rejects_unknown_repos_like_github():
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        await FakeGitHub(viewer="me").repo_labels("o/missing")
+
+
+async def test_fake_matches_repo_names_ignoring_case_like_github():
+    github = FakeGitHub(viewer="me", labels={"o/r": ["bug"]})
+    assert await github.repo_labels("O/R") == ["bug"]

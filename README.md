@@ -80,6 +80,47 @@ pipx install lazyissues
 
 Until then, run it from a checkout with `uv run lazyissues`. Maintainers cut releases with [docs/RELEASING.md](https://github.com/cdowell09/lazyissues/blob/main/docs/RELEASING.md).
 
+## Setup
+
+The first time you run `lazyissues` there is no config yet, so it starts setup. Setup needs `gh` installed and logged in (`gh auth login`); without it, lazyissues prints what to run and exits.
+
+1. **Repos.** Setup suggests the repos where you have open issues. Uncheck any you don't want, and type `owner/name` and Enter to add others, including org repos. A repo GitHub won't read (an org that enforces SAML, say) is left out with the reason; add it again to retry. If GitHub can't be reached at all, press `r` to try again.
+2. **Status sources.** A repo linked to exactly one project uses that project's Status field; any other repo uses labels. Change either with the repo's dropdown. For a label-backed repo, check the labels that are statuses; none are checked for you, so `bug` never becomes a status by accident.
+3. **Statuses.** The statuses from every repo, merged by name, with project options that mean done (Done, Closed, Complete) left out because closing an issue is how it gets there. Reorder them with `shift+↑`/`shift+↓` or the buttons, and check the active ones ("In Progress" starts checked). An empty list is fine; you can add statuses later.
+4. **Save** (`ctrl+s`) writes `config.toml` and opens My Work. `esc` goes back a step, and `ctrl+q` quits without saving.
+
+If your `gh` token lacks the `project` scope, setup says so and offers labels only. Run `gh auth refresh -s project`, then start lazyissues again to use project boards.
+
+Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`). To run setup again, delete or rename `config.toml`.
+
+## Configuration
+
+`config.toml` lives in `~/.config/lazyissues/` (or `$XDG_CONFIG_HOME/lazyissues/`) on macOS and Linux, and `%APPDATA%\lazyissues\` on Windows. lazyissues rewrites it in place when it saves, keeping your comments, so edit it while the app isn't running.
+
+```toml
+team = ["octo-dev", "sam-reef"]     # GitHub logins in the Team tab
+
+[[repos]]                           # at least one
+name = "octo-dev/tidepool"
+status_source = "labels"            # the default
+
+[[repos]]
+name = "octo-dev/lanternfish"
+status_source = "project"
+project = "octo-dev/3"              # owner/number of the project
+
+[[statuses]]                        # display order; may be empty
+name = "In Progress"
+active = true                       # moving here assigns you if nobody is
+key = "p"                           # move shortcut
+
+[[filters]]                         # saved GitHub issue searches
+name = "Ready for me"
+query = "label:ready-for-human"
+```
+
+An invalid file stops lazyissues before the TUI starts, with a message naming the problem.
+
 ## License
 
 [MIT](https://github.com/cdowell09/lazyissues/blob/main/LICENSE)

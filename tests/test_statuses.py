@@ -1,6 +1,6 @@
 from lazyissues.config import Config, Repo, Status
 from lazyissues.models import Issue
-from lazyissues.statuses import NO_STATUS, IssueStatus, StatusRules
+from lazyissues.statuses import NO_STATUS, IssueStatus, StatusRules, is_done_option
 
 CONFIG = Config(
     repos=[Repo("a/labels"), Repo("a/board", "project", "a/7")],
@@ -68,3 +68,12 @@ def test_active_statuses_match_by_normalized_name():
     assert rules.is_active("in_progress")
     assert not rules.is_active("Todo")
     assert not rules.is_active("Blocked")
+
+
+def test_project_options_that_mean_done():
+    assert [is_done_option(n) for n in ("Done", "closed", "COMPLETED", "In Progress")] == [
+        True,
+        True,
+        True,
+        False,
+    ]

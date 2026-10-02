@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass, field, replace
 
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssueDetail
+from lazyissues.models import Issue, IssueDetail, Project
 
 
 @dataclass
@@ -15,6 +15,9 @@ class FakeGitHub:
     # Body, hierarchy, project fields and activity by issue key. Each detail's `issue` is
     # ignored: it always comes from `issues` and `closed`.
     details: dict[str, IssueDetail] = field(default_factory=dict)
+    scopes: set[str] = field(default_factory=lambda: {"repo", "read:org", "project"})
+    labels: dict[str, list[str]] = field(default_factory=dict)  # by repo
+    projects: dict[str, list[Project]] = field(default_factory=dict)  # linked projects, by repo
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -45,7 +48,8 @@ class FakeGitHub:
                         return False
                 case "repo":
                     repos.append(value)
-                case "assignee":
+                # The fake knows no authors or commenters, so involvement is assignment.
+                case "assignee" | "involves":
                     if (self.viewer if value == "@me" else value) not in issue.assignees:
                         return False
                 case "no" if value == "assignee":
@@ -58,3 +62,20 @@ class FakeGitHub:
                     if term.lower() not in issue.title.lower():
                         return False
         return not repos or issue.repo in repos
+
+    async def whoami(self) -> tuple[str, set[str]]:
+        return self.viewer, self.scopes
+
+    async def repo_labels(self, repo: str) -> list[str]:
+        return self.labels.get(self._resolve(repo), [])
+
+    async def repo_projects(self, repo: str) -> list[Project]:
+        return self.projects.get(self._resolve(repo), [])
+
+    def _resolve(self, repo: str) -> str:
+        """The repo's own name: GitHub matches names ignoring case."""
+        known = {*self.labels, *self.projects, *(issue.repo for issue in self.issues)}
+        for name in known:
+            if name.casefold() == repo.casefold():
+                return name
+        raise GitHubError(f"Could not resolve to a Repository with the name '{repo}'.")
