@@ -5,6 +5,7 @@ One `Mover` serves every view. A view binds `m` to `pick` and passes its key pre
 """
 
 import webbrowser
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -17,10 +18,11 @@ from textual.screen import ModalScreen
 from textual.signal import Signal
 from textual.widgets import Static
 
+from lazyissues.bulk import Outcome
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.move_picker import MovePicker
-from lazyissues.move_planner import MoveTo, Planner, Skip, Target, apply, send
+from lazyissues.move_planner import MoveTo, Planner, Skip, Step, Target, apply, send
 from lazyissues.move_tracker import MoveTracker, Rejected
 from lazyissues.statuses import StatusRules
 from lazyissues.store import now
@@ -110,7 +112,7 @@ class Mover:
         if self.moves.pending(issue.key):
             self._still_moving(issue)
             return
-        planner = await self._planner(issue)
+        planner = await self.planner([issue])
         if planner is None:
             return
         picker = MovePicker(
@@ -124,7 +126,7 @@ class Mover:
             await self._move(issue, target, planner)
 
     async def _move(self, issue: Issue, target: Target, planner: Planner | None = None) -> None:
-        planner = planner or await self._planner(issue)
+        planner = planner or await self.planner([issue])
         if planner is None:
             return
         plan = planner.plan(issue, target)
@@ -134,36 +136,65 @@ class Mover:
         if not self.moves.start(issue, target.label):  # one move per issue at a time
             self._still_moving(issue)
             return
+        if rejected := await self._send_started(issue, plan):
+            self.app.push_screen(
+                RejectedMoveBanner(rejected), lambda _: self.moves.dismiss(rejected)
+            )
+
+    async def send_each(self, outcomes: Sequence[Outcome], label: str) -> list[Outcome]:
+        """Make a bulk move, `label`, of each issue `outcomes` plans for, with GitHub's
+        error on each it refuses. Every move starts at once, so each shows as pending, then
+        they go one by one. An issue with a move in flight is skipped."""
+        started = [
+            outcome
+            if isinstance(outcome.plan, Skip) or self.moves.start(outcome.issue, label)
+            else replace(
+                outcome, plan=Skip(f"Still moving: {self.moves.pending(outcome.issue.key)}")
+            )
+            for outcome in outcomes
+        ]
+        done = []
+        for outcome in started:
+            plan = outcome.plan
+            if not isinstance(plan, Skip) and (
+                rejected := await self._send_started(outcome.issue, plan)
+            ):
+                self.moves.dismiss(rejected)  # the bulk summary lists it, not a banner each
+                outcome = replace(outcome, error=rejected.error)
+            done.append(outcome)
+        return done
+
+    async def _send_started(self, issue: Issue, plan: list[Step]) -> Rejected | None:
+        """Send `plan`, the move of `issue` the tracker `start`ed, and settle it: confirmed,
+        or rejected and kept in the tracker until dismissed (returned, to show)."""
         self.changed.publish(issue)
         try:
             await send(self.github, issue, plan)
         except GitHubError as e:
             self.moves.reject(issue.key, str(e))
             self.changed.publish(issue)
-            rejected = self.moves.rejected[-1]
-            self.app.push_screen(
-                RejectedMoveBanner(rejected), lambda _: self.moves.dismiss(rejected)
-            )
-            return
+            return self.moves.rejected[-1]
         self.moves.confirm(issue.key, plan, now())
         if detail := self.details.get(issue.key):
             self.details[issue.key] = replace(detail, issue=apply(plan, detail.issue))
         self.changed.publish(apply(plan, issue))
+        return None
 
     def _still_moving(self, issue: Issue) -> None:
         pending = self.moves.pending(issue.key)
         self.app.notify(f"{issue.ref} is still moving: {pending}.", severity="warning")
 
-    async def _planner(self, issue: Issue) -> Planner | None:
-        """A planner knowing the viewer and `issue`'s project options, or None if GitHub
-        couldn't say."""
-        project = self.rules.repo_of(issue).project
+    async def planner(self, issues: Sequence[Issue]) -> Planner | None:
+        """A planner knowing the viewer and the project options of `issues`, or None if
+        GitHub couldn't say (the error shows)."""
+        projects = {project for issue in issues if (project := self.rules.repo_of(issue).project)}
         try:
             if self._viewer is None:
                 self._viewer, _ = await self.github.whoami()
-            if project and project not in self._options:
+            for project in projects - self._options.keys():
                 self._options[project] = await self.github.project_status_options(project)
         except GitHubError as e:
-            self.app.notify(str(e), title=f"Can't move {issue.ref}", severity="error", timeout=10)
+            moving = issues[0].ref if len(issues) == 1 else f"{len(issues)} issues"
+            self.app.notify(str(e), title=f"Can't move {moving}", severity="error", timeout=10)
             return None
         return Planner(self.rules, self._viewer, self._options)

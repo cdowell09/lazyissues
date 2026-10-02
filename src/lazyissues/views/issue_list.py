@@ -7,6 +7,7 @@ owns the tab's issue store and view state, and draws whatever
 """
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -23,7 +24,7 @@ from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
-from lazyissues import search
+from lazyissues import bulk_actions, search
 from lazyissues.config import Config
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.forms.form import Written
@@ -45,6 +46,7 @@ from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 
 COLUMNS = ("Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
+CHECKED, UNCHECKED = "☑", "☐"  # each row's label: whether it is selected; a click toggles it
 
 
 class IssueTable(DataTable):
@@ -97,6 +99,10 @@ class IssueList(IssueActions, Widget):
         Binding("Z", "fold_all", "Fold all", show=False),
         Binding("R", "repo_filter", "Repo"),
         Binding("m", "move", "Move"),
+        Binding("space", "toggle_selected", "Select"),
+        Binding("A", "select_all", "Select all shown", show=False),
+        Binding("u", "clear_selection", "Clear selection", show=False),
+        Binding("B", "bulk", "Bulk move or assign"),
     ]
 
     LABEL: ClassVar[str]  # the tab's title
@@ -129,6 +135,7 @@ class IssueList(IssueActions, Widget):
         self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
         # Each table row's group, and its issue's row (None for a header or the empty message).
         self._rows: list[tuple[str, Row | None]] = []
+        self._groups: dict[str, Group] = {}  # the shown groups, by name
         self.error: str | None = None  # why the latest refresh failed
 
     @property
@@ -228,14 +235,17 @@ class IssueList(IssueActions, Widget):
         table.clear()
         self._rows = []
         groups = visible_groups(self.store.issues, self.grouping(), self.rules, self.state)
+        self._groups = {group.name: group for group in groups}
         for group in groups:
-            table.add_row(Text(self.header(group), style="bold"), *[""] * (len(COLUMNS) - 1))
+            mark = self._mark(issue.key for issue in group.issues)
+            header = Text(self.header(group), style="bold")
+            table.add_row(header, *[""] * (len(COLUMNS) - 1), label=mark)
             self._rows.append((group.name, None))
             for listed in group.rows:
                 # Team lists a shared issue under each assignee; row keys must be unique.
                 key = listed.issue.key
                 key = key if key not in table.rows else f"{group.name}/{key}"
-                table.add_row(*self._cells(listed), key=key)
+                table.add_row(*self._cells(listed), key=key, label=self._mark([listed.issue.key]))
                 self._rows.append((group.name, listed))
         if not groups:
             # With nothing loaded, a failed refresh's error stays after its toast goes.
@@ -245,6 +255,11 @@ class IssueList(IssueActions, Widget):
             row = table.get_row_index(selected)
         table.move_cursor(row=row)
         self._show_filters()
+
+    def _mark(self, keys: Iterable[str]) -> str:
+        """Checked when every one of the issues `keys` is selected (and there is one)."""
+        keys = set(keys)
+        return CHECKED if keys and keys <= self.state.selected else UNCHECKED
 
     def header(self, group: Group) -> str:
         """A group's header row; a tab may add to it."""
@@ -279,6 +294,7 @@ class IssueList(IssueActions, Widget):
             f"status: {state.focus}" if state.focus else "",
             f"repo: {state.repo}" if state.repo else "",
             f"done: last {self.config.done_window_days} days" if state.show_done else "",
+            f"selected: {len(chosen)}" if (chosen := self._chosen()) else "",
         ]
         line = self.query_one("#filters", Static)
         line.update("  ·  ".join(p for p in parts if p))
@@ -286,7 +302,8 @@ class IssueList(IssueActions, Widget):
 
     def on_click(self, event: events.Click) -> None:
         """A click on a row selects it, and on the selected row opens it. A click on a group
-        header, or on a parent's fold arrow, folds or unfolds it."""
+        header, or on a parent's fold arrow, folds or unfolds it. A click on a checkbox
+        (the row's label) selects its issue, or its group's, for a bulk action."""
         table = self.query_one(DataTable)
         at = event.style.meta.get("row", -1)
         if table.text_selection is not None or not 0 <= at < len(self._rows):
@@ -294,7 +311,9 @@ class IssueList(IssueActions, Widget):
         event.stop()
         again = at == table.cursor_row
         table.move_cursor(row=at)
-        if self._rows[at][1] is None or self._on_fold_arrow(table, event):
+        if event.style.meta.get("column") == -1:  # Textual's column of row labels
+            self.action_toggle_selected()
+        elif self._rows[at][1] is None or self._on_fold_arrow(table, event):
             self.action_fold()
         elif again:
             table.action_select_cursor()
@@ -403,6 +422,37 @@ class IssueList(IssueActions, Widget):
 
     def action_repo_filter(self) -> None:
         self.state = self.state.cycle_repo(self.config.repo_names)
+
+    def action_toggle_selected(self) -> None:
+        """Select or unselect the issue under the cursor, or on a header its whole group."""
+        cursor = self.query_one(DataTable).cursor_row
+        if not 0 <= cursor < len(self._rows):
+            return
+        group, row = self._rows[cursor]
+        issues = [row.issue] if row else self._groups[group].issues
+        self.state = self.state.toggle_selected(issue.key for issue in issues)
+
+    def action_select_all(self) -> None:
+        """Select every issue the filters show, folded or not."""
+        shown = {issue.key for group in self._groups.values() for issue in group.issues}
+        self.state = replace(self.state, selected=self.state.selected | shown)
+
+    def action_clear_selection(self) -> None:
+        self.state = replace(self.state, selected=frozenset())
+
+    def _chosen(self) -> list[Issue]:
+        """The selected issues still loaded, whether the filters show them or not."""
+        return [issue for issue in self.store.issues if issue.key in self.state.selected]
+
+    def action_bulk(self) -> None:
+        """Move or assign the selected issues."""
+        issues = self._chosen()
+        if not issues:
+            self.notify("Select issues with Space, or every one shown with A.", title="Bulk")
+            return
+        self.app.run_worker(
+            bulk_actions.run(self.mover, self.writer, issues, self.action_clear_selection)
+        )
 
 
 def bound_keys() -> set[str]:

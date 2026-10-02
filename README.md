@@ -81,6 +81,9 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `a` | lists, detail | assign: pick from the team roster and the repo's assignable users |
 | `c` | lists, detail | create an issue |
 | `e` | lists, detail | edit the issue's title, body, labels and milestone |
+| `Space` | lists | select the issue for a bulk action, or on a group header the whole group; again to unselect |
+| `A` `u` | lists | select every issue shown; clear the selection |
+| `B` | lists | bulk move or assign the selected issues |
 | `←` `→` | detail | previous or next issue in the list underneath |
 | `z` | detail | toggle full screen |
 | `o` | detail | open the issue in your browser |
@@ -101,7 +104,7 @@ Each tab remembers its selection, search, status focus, done toggle, folds and r
 
 ## Mouse
 
-Click a tab or row to select it, and click the selected row again to open it. Click a group header, or a parent's `▸`/`▾`, to fold or unfold it. Menus work the same way: in the move picker and the Filters sidebar, click an option to choose it and click it again to take it. Checkboxes, fields and buttons in forms, preferences and setup are clickable. Click **[×]** at the top of the issue detail to close it. The wheel scrolls lists, the detail, help and editors.
+Click a tab or row to select it, and click the selected row again to open it. Click a group header, or a parent's `▸`/`▾`, to fold or unfold it. Click a row's `☐` to select it for a bulk action, or a group header's to select the group. Menus work the same way: in the move picker and the Filters sidebar, click an option to choose it and click it again to take it. Checkboxes, fields and buttons in forms, preferences and setup are clickable. Click **[×]** at the top of the issue detail to close it. The wheel scrolls lists, the detail, help and editors.
 
 Drag across text in a list, the detail or a form field to select it. Press `Ctrl+C`, or click **Copy** in the footer while text is selected, to copy it. lazyissues copies through your terminal (OSC 52) and also through the system clipboard, so copying works in terminals that ignore OSC 52, such as macOS Terminal: `pbcopy` on macOS, `wl-copy` or `xclip` on Linux (install one), and `clip.exe` on Windows.
 
@@ -115,6 +118,17 @@ Drag across text in a list, the detail or a form field to select it. Press `Ctrl
 - Moving a closed issue to a status reopens it.
 
 The issue keeps its status until GitHub confirms the move; the list and detail show `⋯` and the move meanwhile, and an issue has one move at a time. If GitHub rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the issue in your browser. A refresh that was already running when a move was confirmed doesn't undo it.
+
+## Bulk actions
+
+`Space` selects the issue under the cursor (`☑`), or on a group header every issue in the group, folded or not; `A` selects every issue the tab shows and `u` clears the selection. Each tab keeps its own selection, through refreshes, and the line under the list counts it. Issues a search or filter hides stay selected.
+
+`B` acts on the selected issues:
+
+- **Move** offers every move at least one of them can make, each with how many can. Each issue is planned as if moved on its own, so a move works across label-backed and project-backed repos at once.
+- **Assign** offers your team roster first, then everyone the issues' repos can assign, each with how many can. It adds that person and leaves other assignees as they are.
+
+Before anything is sent, a confirmation lists the issues that will change and those skipped with the reason (already in that status or assigned to that person, a status their repo doesn't have, someone their repo can't assign, a move still in flight). `Enter` or `y` sends, `Esc` or `n` cancels. Moves show `⋯` until GitHub confirms each one, as single moves do. The summary then lists what changed, what GitHub refused with its error, and what was skipped.
 
 ## Preferences
 

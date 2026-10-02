@@ -45,7 +45,12 @@ def first_cell(app: App, row: int, view: str = "my-work") -> str:
     return str(table(app, view).get_row_at(row)[0])
 
 
-async def click_row(pilot: Pilot, row: int, x: int = 2, view: str = "my-work") -> None:
+# Each row starts with its checkbox (the table's row label: "☐" between paddings); a cell's
+# text starts one column into the cell, after its padding.
+ISSUE_TEXT = 4
+
+
+async def click_row(pilot: Pilot, row: int, x: int = ISSUE_TEXT + 1, view: str = "my-work") -> None:
     """Click `row` of `view`'s list (0 is the first row under the column headers)."""
     await pilot.click(table(pilot.app, view), offset=(x, row + 1))
     await pilot.pause()
@@ -138,10 +143,10 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
         assert first_cell(app, 3, "team") == "▾ lanternfish#9"
         assert first_cell(app, 4, "team") == "└ lanternfish#11"
 
-        await click_row(pilot, 3, x=1, view="team")  # the arrow, after the cell's padding
+        await click_row(pilot, 3, x=ISSUE_TEXT, view="team")  # the arrow
         assert first_cell(app, 3, "team") == "▸ lanternfish#9"
         assert first_cell(app, 4, "team") == "tidepool#15 ⚠"
-        await click_row(pilot, 3, x=1, view="team")
+        await click_row(pilot, 3, x=ISSUE_TEXT, view="team")
         assert first_cell(app, 4, "team") == "└ lanternfish#11"
         assert not isinstance(app.screen, IssueDetailScreen)
 
@@ -230,8 +235,8 @@ async def test_dragging_across_a_list_row_selects_its_text_without_opening_it():
         await settled(pilot)
         await click_row(pilot, 1)
         ref = first_cell(app, 1)
-        # A cell's text starts one column in, after its padding; row 1 is under the headers.
-        await drag(pilot, table(app), (1, 2), (len(ref), 2))
+        # Row 1 is under the headers.
+        await drag(pilot, table(app), (ISSUE_TEXT, 2), (ISSUE_TEXT + len(ref) - 1, 2))
         assert not isinstance(app.screen, IssueDetailScreen)
         await pilot.press("ctrl+c")
         assert copied == [ref]
