@@ -44,13 +44,13 @@ class IssueStore:
 
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
         """Await a read from GitHub and apply it, stamped with when it was requested."""
-        requested_at = time.monotonic()
+        requested_at = time.perf_counter()  # monotonic, and fine-grained on Windows too
         self.replace(await read, requested_at)
 
     def replace(self, issues: list[Issue], requested_at: float) -> None:
         """Apply a read unless it was requested before the one already applied (ADR 0003).
 
-        `requested_at` is on `time.monotonic()`'s clock, like `refresh`'s stamps.
+        `requested_at` is on `time.perf_counter()`'s clock, like `refresh`'s stamps.
         """
         if requested_at < self.requested_at:
             return
