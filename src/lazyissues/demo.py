@@ -147,6 +147,7 @@ def github() -> FakeGitHub:
         },
         projects={lantern: [board]},
         milestones={tide: [v04, v10], lantern: [v10]},
+        assignable={tide: [VIEWER, *TEAM], lantern: [VIEWER, "sam-reef", "ray-coral"]},
     )
 
 

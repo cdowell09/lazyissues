@@ -25,6 +25,7 @@ from lazyissues.mover import Mover
 from lazyissues.store import IssueStore
 from lazyissues.view_model import ViewState
 from lazyissues.views.issue_list import IssueList
+from lazyissues.writer import Writer
 
 
 def results_id(query: str) -> str:
@@ -44,8 +45,9 @@ class FilterResults(IssueList):
         store: IssueStore,
         details: dict[str, IssueDetail],
         mover: Mover,
+        writer: Writer,
     ) -> None:
-        super().__init__(config, github, store, details, mover, id=results_id(query))
+        super().__init__(config, github, store, details, mover, writer, id=results_id(query))
         self.saved_query = query  # GitHub search syntax, as the user wrote it
         if search.asks_for_closed(query):  # its closed issues are what the user asked for
             self.set_reactive(IssueList.state, ViewState(show_done=True))

@@ -6,7 +6,16 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from lazyissues.github import GitHubError
-from lazyissues.models import CloseReason, Issue, IssueDetail, Milestone, Project, parse_key
+from lazyissues.models import (
+    CloseReason,
+    Event,
+    Issue,
+    IssueChanges,
+    IssueDetail,
+    Milestone,
+    Project,
+    parse_key,
+)
 from lazyissues.statuses import normalize
 
 
@@ -27,6 +36,7 @@ class FakeGitHub:
     project_items: set[tuple[str, str]] = field(default_factory=set)
     # Open milestones' titles, by repo; their issue counts come from `issues`.
     milestones: dict[str, list[str]] = field(default_factory=dict)
+    assignable: dict[str, list[str]] = field(default_factory=dict)  # assignable logins, by repo
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -45,6 +55,68 @@ class FakeGitHub:
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         issue = self.issues[self._index(repo, number)]
         return replace(self.details.get(issue.key, IssueDetail(issue)), issue=self._current(issue))
+
+    async def assignable_users(self, repo: str) -> list[str]:
+        return self.assignable.get(self._resolve(repo), [])
+
+    async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
+        self._writable(repo, number)
+        detail = await self.issue_detail(repo, number)
+        event = Event(self.viewer, datetime.now(UTC), "commented", body)
+        self.details[detail.issue.key] = replace(detail, activity=(*detail.activity, event))
+        return await self.issue_detail(repo, number)
+
+    async def change_assignees(
+        self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]
+    ) -> IssueDetail:
+        index = self._writable(repo, number)
+        for login in add:
+            if repo in self.assignable and login not in self.assignable[repo]:
+                raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
+        issue = self.issues[index]
+        kept = [login for login in issue.assignees if login not in remove]
+        added = [login for login in add if login not in kept]
+        self.issues[index] = replace(issue, assignees=(*kept, *added))
+        return await self.issue_detail(repo, number)
+
+    async def create_issue(
+        self,
+        repo: str,
+        title: str,
+        *,
+        body: str = "",
+        labels: Sequence[str] = (),
+        milestone: str | None = None,
+    ) -> IssueDetail:
+        if repo in self.read_only:
+            raise GitHubError(f"Resource not accessible by integration: {repo}")
+        self._check(repo, labels, milestone)
+        number = max((issue.number for issue in self.issues if issue.repo == repo), default=0) + 1
+        url = f"https://github.com/{repo}/issues/{number}"
+        issue = Issue(repo, number, title, url, labels=tuple(labels), milestone=milestone)
+        self.issues.append(issue)
+        self.details[issue.key] = IssueDetail(issue, body=body)
+        return await self.issue_detail(repo, number)
+
+    async def update_issue(self, repo: str, number: int, changes: IssueChanges) -> IssueDetail:
+        index = self._writable(repo, number)
+        self._check(repo, (), changes.get("milestone"))
+        detail = await self.issue_detail(repo, number)
+        self.issues[index] = replace(
+            self.issues[index],
+            title=changes.get("title", detail.issue.title),
+            milestone=changes.get("milestone", detail.issue.milestone),
+        )
+        self.details[detail.issue.key] = replace(detail, body=changes.get("body", detail.body))
+        return await self.issue_detail(repo, number)
+
+    def _check(self, repo: str, labels: Sequence[str], milestone: str | None) -> None:
+        """Reject names GitHub couldn't resolve, as the real gateway does before writing."""
+        for label in labels:
+            if label not in self.labels.get(repo, []):
+                raise GitHubError(f"{repo} has no label {label!r}.")
+        if milestone is not None and milestone not in self.milestones.get(repo, []):
+            raise GitHubError(f"{repo} has no open milestone {milestone!r}.")
 
     async def project_status_options(self, project: str) -> list[str]:
         for linked in self.projects.values():
@@ -176,12 +248,8 @@ class FakeGitHub:
 
     def _resolve(self, repo: str) -> str:
         """The repo's own name: GitHub matches names ignoring case."""
-        known = {
-            *self.labels,
-            *self.projects,
-            *self.milestones,
-            *(issue.repo for issue in self.issues),
-        }
+        known = {*self.labels, *self.projects, *self.milestones, *self.assignable}
+        known |= {issue.repo for issue in self.issues}
         for name in known:
             if name.casefold() == repo.casefold():
                 return name

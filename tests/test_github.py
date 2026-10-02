@@ -255,6 +255,33 @@ def answer(data: dict, headers: dict | None = None):
     return handler, sent
 
 
+def detail_node(number: int, **extra) -> dict:
+    """An issue as the detail fields select it, as mutations return it."""
+    return (
+        node(number)
+        | {
+            "body": "",
+            "milestone": None,
+            "parent": None,
+            "subIssues": {"nodes": []},
+            "timelineItems": {"nodes": []},
+        }
+        | extra
+    )
+
+
+def replying(*responses: dict):
+    """A handler answering each request with the next response, recording what was sent."""
+    sent: list[dict] = []
+    answers = iter(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": next(answers)})
+
+    return handler, sent
+
+
 @pytest.mark.parametrize(
     ("headers", "scopes"),
     [
@@ -339,3 +366,168 @@ async def test_repo_milestones_lists_open_milestones_with_open_and_closed_issue_
         {"owner": "o", "name": "r", "after": None},
         {"owner": "o", "name": "r", "after": "c1"},
     ]
+
+
+def target(id: str = "I_5") -> dict:
+    """The write target lookup's answer: the repo's and the issue's IDs."""
+    issue = {"id": id, "labels": {"nodes": []}, "projectItems": {"nodes": []}}
+    return {"repository": {"id": "R_1", "issue": issue}}
+
+
+def mutation(sent: dict) -> tuple[str, dict]:
+    """The mutation a request ran, and its input."""
+    name = sent["query"].split("{", 2)[1].split("(")[0].strip()
+    return name, sent["variables"]["input"]
+
+
+async def test_comment_adds_it_to_the_issue_and_returns_the_fresh_detail():
+    comment = {
+        "__typename": "IssueComment",
+        "actor": {"login": "me"},
+        "createdAt": stamp(0),
+        "body": "On it",
+    }
+    handler, sent = replying(
+        target(), {"addComment": {"subject": detail_node(5, timelineItems={"nodes": [comment]})}}
+    )
+
+    detail = await gateway(handler).comment("o/r", 5, "On it")
+
+    assert sent[0]["variables"] == {"owner": "o", "name": "r", "number": 5}
+    assert mutation(sent[1]) == ("addComment", {"subjectId": "I_5", "body": "On it"})
+    assert "subject { ...DetailFields }" in sent[1]["query"]
+    assert detail.comments == (Event("me", at(0), "commented", "On it"),)
+
+
+def assignees_github(fail: str | None = None):
+    """Answers the lookups `change_assignees` makes, in whatever order they arrive, and
+    records the mutations; `fail` names a mutation GitHub rejects."""
+    mutations: list[tuple[str, dict]] = []
+    assigned = {"assignees": {"nodes": [{"login": "kim"}, {"login": "sam"}]}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["query"].lstrip().startswith("mutation"):
+            name, fields = mutation(body)
+            mutations.append((name, fields))
+            if name == fail:
+                return httpx.Response(200, json={"errors": [{"message": "Forbidden"}]})
+            data = {name: {"assignable": detail_node(5, **assigned)}}
+        elif "user(login" in body["query"]:
+            data = {"user": {"id": f"U_{body['variables']['login']}"}}
+        else:
+            data = target()
+        return httpx.Response(200, json={"data": data})
+
+    return handler, mutations
+
+
+async def test_change_assignees_adds_then_removes_by_user_id():
+    handler, mutations = assignees_github()
+
+    detail = await gateway(handler).change_assignees("o/r", 5, add=["sam"], remove=["me"])
+
+    assert mutations == [
+        ("addAssigneesToAssignable", {"assignableId": "I_5", "assigneeIds": ["U_sam"]}),
+        ("removeAssigneesFromAssignable", {"assignableId": "I_5", "assigneeIds": ["U_me"]}),
+    ]
+    assert detail.issue.assignees == ("kim", "sam")  # from the last mutation's payload
+
+
+async def test_change_assignees_sends_only_the_side_that_changes():
+    handler, mutations = assignees_github()
+    await gateway(handler).change_assignees("o/r", 5, add=[], remove=["me"])
+    assert [name for name, _ in mutations] == ["removeAssigneesFromAssignable"]
+
+
+async def test_change_assignees_says_an_add_went_through_when_the_remove_fails():
+    handler, _ = assignees_github(fail="removeAssigneesFromAssignable")
+    with pytest.raises(GitHubError, match="Added sam, but couldn't remove me: Forbidden"):
+        await gateway(handler).change_assignees("o/r", 5, add=["sam"], remove=["me"])
+
+
+def page(nodes: list[dict]) -> dict:
+    return {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}
+
+
+async def test_assignable_users_lists_logins():
+    users = page([{"login": "me"}, {"login": "sam"}])
+    handler, sent = replying({"repository": {"assignableUsers": users}})
+
+    assert await gateway(handler).assignable_users("o/r") == ["me", "sam"]
+    assert sent[0]["variables"] == {"owner": "o", "name": "r", "after": None}
+
+
+def labels(*names: str) -> dict:
+    return {"repository": {"labels": page([{"id": f"L_{n}", "name": n} for n in names])}}
+
+
+def milestones(*titles: str) -> dict:
+    nodes = [{"id": f"M_{title}", "title": title} for title in titles]
+    return {"repository": {"milestones": page(nodes)}}
+
+
+async def test_create_issue_resolves_labels_and_milestone_by_name():
+    created = detail_node(9, body="Steps", milestone={"title": "v1"})
+    handler, sent = replying(
+        {"repository": {"id": "R_1"}},
+        labels("bug", "todo"),
+        milestones("v1"),
+        {"createIssue": {"issue": created}},
+    )
+
+    detail = await gateway(handler).create_issue(
+        "o/r", "Issue 9", body="Steps", labels=["todo"], milestone="v1"
+    )
+
+    assert mutation(sent[-1]) == (
+        "createIssue",
+        {
+            "repositoryId": "R_1",
+            "title": "Issue 9",
+            "body": "Steps",
+            "labelIds": ["L_todo"],
+            "milestoneId": "M_v1",
+        },
+    )
+    assert (detail.issue.number, detail.body, detail.issue.milestone) == (9, "Steps", "v1")
+
+
+async def test_create_issue_without_labels_or_milestone_looks_none_up():
+    handler, sent = replying(
+        {"repository": {"id": "R_1"}}, {"createIssue": {"issue": detail_node(9)}}
+    )
+
+    await gateway(handler).create_issue("o/r", "Issue 9")
+
+    assert mutation(sent[-1])[1] == {
+        "repositoryId": "R_1",
+        "title": "Issue 9",
+        "body": "",
+        "labelIds": [],
+        "milestoneId": None,
+    }
+
+
+async def test_an_unknown_label_raises_before_writing():
+    handler, sent = replying({"repository": {"id": "R_1"}}, labels("bug"))
+
+    with pytest.raises(GitHubError, match="o/r has no label 'nope'"):
+        await gateway(handler).create_issue("o/r", "x", labels=["nope"])
+    assert len(sent) == 2
+
+
+async def test_update_issue_sends_only_the_changed_fields():
+    handler, sent = replying(target(), {"updateIssue": {"issue": detail_node(5)}})
+
+    await gateway(handler).update_issue("o/r", 5, {"title": "New", "body": "Text"})
+
+    assert mutation(sent[-1]) == ("updateIssue", {"id": "I_5", "title": "New", "body": "Text"})
+
+
+async def test_update_issue_clears_the_milestone():
+    handler, sent = replying(target(), {"updateIssue": {"issue": detail_node(5)}})
+
+    await gateway(handler).update_issue("o/r", 5, {"milestone": None})
+
+    assert mutation(sent[-1]) == ("updateIssue", {"id": "I_5", "milestoneId": None})

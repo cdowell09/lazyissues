@@ -12,6 +12,7 @@ from textual.widgets.option_list import Option
 
 from lazyissues.config import Config, Preferences, is_milestone_key
 from lazyissues.status_list import StatusList
+from lazyissues.views.issue_list import bound_keys
 
 
 class PreferencesScreen(ModalScreen[Config | None]):
@@ -105,6 +106,12 @@ class PreferencesScreen(ModalScreen[Config | None]):
         key = event.value.strip() or None
         if owner := self.query_one(StatusList).set_key(key):
             self.notify(f"{key} already moves to {owner}.", severity="warning")
+        elif key and {key.lower(), key.upper()} & bound_keys():
+            self.notify(
+                f"{key} is already a key in the lists and the detail, so this shortcut"
+                " won't work there.",
+                severity="warning",
+            )
 
     def action_save(self) -> None:
         team = _lines(self.query_one("#team", TextArea).text)

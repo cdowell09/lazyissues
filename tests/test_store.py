@@ -141,4 +141,42 @@ def test_a_confirmed_move_shows_on_the_loaded_issues_and_their_snapshot(tmp_path
     store.apply_moves()
 
     assert store.issues == [issue(1, labels=("doing",)), issue(2)]
+
+
+def test_update_replaces_a_loaded_issue_in_place_and_saves_it(tmp_path):
+    path = tmp_path / "snapshot.json"
+    store = IssueStore(path)
+    store.replace([issue(1), issue(2)], requested_at=1.0)
+
+    assert store.update(issue(1, "Renamed"), written_at=2.0)
+    assert not store.update(issue(3), written_at=2.0)  # not loaded here, so not added
+
+    assert [i.title for i in store.issues] == ["Renamed", "An issue"]
     assert IssueStore(path).issues == store.issues
+
+
+def test_a_read_requested_before_a_write_keeps_the_written_copy(tmp_path):
+    store = IssueStore(tmp_path / "snapshot.json")
+    store.replace([issue(1), issue(2)], requested_at=1.0)
+    store.update(issue(1, "Written"), written_at=5.0)
+
+    store.replace([issue(1, "Stale"), issue(2, "Fresh")], requested_at=4.0)
+    assert [i.title for i in store.issues] == ["Written", "Fresh"]
+
+    store.replace([issue(1, "Newer"), issue(2)], requested_at=6.0)
+    assert store.issues[0].title == "Newer"
+
+
+def test_a_move_confirmed_before_a_write_is_not_applied_over_it_again(tmp_path):
+    moves = MoveTracker()
+    store = IssueStore(tmp_path / "snapshot.json", moves)
+    store.replace([issue(1, labels=("todo",))], requested_at=1.0)
+    moves.start(store.issues[0], "doing")
+    moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=2.0)
+    store.apply_moves()
+
+    # A write after the move removed `doing` again; settling the list must not undo it.
+    store.update(issue(1, labels=("bug",)), written_at=3.0)
+    store.apply_moves()
+
+    assert store.issues[0].labels == ("bug",)

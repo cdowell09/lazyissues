@@ -51,6 +51,7 @@ class IssueStore:
         self.moves = moves or MoveTracker()
         self.issues: list[Issue] = self._load()
         self.requested_at = -math.inf  # when the read behind `issues` was requested
+        self._written: dict[str, float] = {}  # when each issue's latest write was sent
 
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
         """Await a read from GitHub and apply it, stamped with when it was requested."""
@@ -61,17 +62,37 @@ class IssueStore:
         """Apply a read requested at `requested_at` (on `now`'s clock).
 
         A read requested before the one already applied is ignored. Within a read, an
-        issue moved since the read was requested keeps its confirmed status.
+        issue moved since the read was requested keeps its confirmed status, and one
+        written since keeps the copy GitHub confirmed for the write (ADR 0003).
         """
         if requested_at < self.requested_at:
             return
-        self.issues = [self.moves.settle(issue, requested_at) for issue in issues]
+        loaded = {issue.key: issue for issue in self.issues}
+        self.issues = [self._settle(issue, requested_at, loaded) for issue in issues]
         self.requested_at = requested_at
         self._save()
 
     def apply_moves(self) -> None:
         """Show the moves confirmed since the loaded read was requested."""
         self.replace(self.issues, self.requested_at)
+
+    def update(self, issue: Issue, written_at: float) -> bool:
+        """Replace the loaded copy of `issue` with the one GitHub confirmed for a write
+        sent at `written_at` (on `now`'s clock); False when `issue` isn't loaded here."""
+        if all(loaded.key != issue.key for loaded in self.issues):
+            return False
+        self._written[issue.key] = written_at
+        self.issues = [issue if loaded.key == issue.key else loaded for loaded in self.issues]
+        self._save()
+        return True
+
+    def _settle(self, issue: Issue, requested_at: float, loaded: dict[str, Issue]) -> Issue:
+        """`issue` as read at `requested_at`, unless it was written since: then the written
+        copy, with only the moves confirmed after the write applied to it."""
+        written = self._written.get(issue.key, -math.inf)
+        if written > requested_at and issue.key in loaded:
+            issue = loaded[issue.key]
+        return self.moves.settle(issue, max(requested_at, written))
 
     def _load(self) -> list[Issue]:
         """The snapshot's issues; a missing, corrupt or old-format one is discarded."""

@@ -213,3 +213,80 @@ async def test_fake_finds_a_milestones_issues_in_one_repo():
 async def test_fake_reports_a_query_it_cannot_parse_as_a_github_error():
     with pytest.raises(GitHubError, match="quotation"):
         await demo.github().search_issues('label:"needs triage')
+
+
+async def test_fake_comment_is_added_to_the_activity_as_the_viewer():
+    github = demo.github()
+    detail = await github.comment("octo-dev/tidepool", 12, "Fixed on main")
+
+    [*_, comment] = detail.comments
+    assert (comment.actor, comment.text) == ("octo-dev", "Fixed on main")
+    assert await github.issue_detail("octo-dev/tidepool", 12) == detail
+
+
+def editable() -> FakeGitHub:
+    return FakeGitHub(
+        viewer="me",
+        issues=[Issue("o/r", 1, "One", "u", ("me",), ("bug",))],
+        labels={"o/r": ["bug", "todo"]},
+        milestones={"o/r": ["v1", "v2"]},
+        assignable={"o/r": ["me", "sam"]},
+    )
+
+
+async def test_fake_lists_assignable_users():
+    assert await editable().assignable_users("o/r") == ["me", "sam"]
+
+
+async def test_fake_change_assignees_adds_and_removes_keeping_others():
+    github = editable()
+    github.issues[0] = replace(github.issues[0], assignees=("me", "kim"))
+    detail = await github.change_assignees("o/r", 1, add=["sam"], remove=["me"])
+    assert detail.issue.assignees == ("kim", "sam")
+    assert (await github.search_issues("assignee:sam"))[0].key == "o/r#1"
+
+    with pytest.raises(GitHubError, match="nobody"):
+        await github.change_assignees("o/r", 1, add=["nobody"], remove=[])
+
+
+async def test_fake_creates_an_issue_numbered_after_the_repos_last():
+    github = editable()
+    detail = await github.create_issue("o/r", "Two", body="Steps", labels=["todo"], milestone="v2")
+
+    assert detail.issue.key == "o/r#2"
+    assert (detail.issue.title, detail.issue.labels) == ("Two", ("todo",))
+    assert (detail.body, detail.issue.milestone) == ("Steps", "v2")
+    assert await github.issue_detail("o/r", 2) == detail
+
+
+async def test_fake_rejects_an_unknown_label_or_milestone():
+    github = editable()
+    with pytest.raises(GitHubError, match="no label 'nope'"):
+        await github.create_issue("o/r", "Two", labels=["nope"])
+    with pytest.raises(GitHubError, match="no open milestone 'v9'"):
+        await github.create_issue("o/r", "Two", milestone="v9")
+    with pytest.raises(GitHubError, match="no open milestone 'v9'"):
+        await github.update_issue("o/r", 1, {"milestone": "v9"})
+    assert len(github.issues) == 1
+
+
+async def test_fake_update_changes_only_the_given_fields():
+    github = editable()
+    await github.update_issue("o/r", 1, {"body": "Old body", "milestone": "v1"})
+
+    detail = await github.update_issue("o/r", 1, {"title": "Renamed"})
+    assert (detail.issue.title, detail.issue.labels) == ("Renamed", ("bug",))
+    assert (detail.body, detail.issue.milestone) == ("Old body", "v1")
+
+    detail = await github.update_issue("o/r", 1, {"milestone": None})
+    assert detail.issue.milestone is None
+
+
+async def test_fake_rejects_edits_to_a_read_only_repo():
+    github = editable()
+    github.read_only.add("o/r")
+    with pytest.raises(GitHubError, match="Resource not accessible"):
+        await github.create_issue("o/r", "Two")
+    with pytest.raises(GitHubError, match="Resource not accessible"):
+        await github.update_issue("o/r", 1, {"title": "Renamed"})
+    assert [issue.title for issue in github.issues] == ["One"]

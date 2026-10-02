@@ -98,9 +98,13 @@ class Mover:
             return
         event.stop()
         if event.character.isupper():
-            self.app.run_worker(self._move(issue, MoveTo(status)))
+            self.move(issue, MoveTo(status))
         else:
             self.pick(issue, MoveTo(status))
+
+    def move(self, issue: Issue, target: Target) -> None:
+        """Make the move at once, without the picker."""
+        self.app.run_worker(self._move(issue, target))
 
     async def _pick(self, issue: Issue, highlight: Target | None) -> None:
         if self.moves.pending(issue.key):
