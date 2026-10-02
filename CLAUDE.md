@@ -14,6 +14,18 @@ uv run pytest
 
 Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platformdirs`, `webbrowser` and Textual's clipboard, so every path, browser link and copy works on all three.
 
+## Architecture
+
+- **`__main__`**: CLI; loads config and the `gh` token before the TUI takes the terminal, so errors print normally
+- **`app`**: the Textual app shell; `tabs()` lists one view per tab
+- **`views/`**: one module per tab; each view owns its loading and rendering
+- **`github`**: the gateway protocol and its GraphQL implementation; `gh_token`
+- **`fake`**: `FakeGitHub`, the in-memory gateway for tests and `--demo`
+- **`demo`**: made-up config and data for `--demo`
+- **`models`**: domain records (`Issue`)
+- **`search`**: scoping search queries to the repo set
+- **`config`**: `config.toml` location and loading
+
 ## Domain and decisions
 
 Name domain concepts with [CONTEXT.md](CONTEXT.md): Issue, Status, Status source, Move, Close reason, Milestone, Sub-issue. Before changing GitHub transport, status interpretation, or move consistency, read the matching decision in [docs/adr/](docs/adr/).
@@ -26,11 +38,11 @@ A status is a name the user defines in config; the app ships none. Each repo's s
 ### Moves wait for GitHub
 A move changes an issue only after GitHub confirms it; a failure keeps the old status and shows the error until dismissed. Every read carries the time it was requested, and a read requested before an issue's latest confirmed move must not overwrite its status ([ADR 0003](docs/adr/0003-confirm-moves-and-reject-stale-status.md)). Route status writes from reads through the cache-update helpers that check this.
 
-### GitHub transport
-GraphQL over `httpx`, authenticated with `gh auth token` ([ADR 0002](docs/adr/0002-graphql-over-httpx-with-gh-token.md)). The client refuses to send requests under pytest; tests use the fake GraphQL responder, so no test reaches GitHub.
+### GitHub gateway
+Everything above the gateway depends on the `Gateway` protocol, never on GraphQL. It has two implementations that must stay in step: `GraphQLGateway` (GraphQL over `httpx`, authenticated with `gh auth token`, [ADR 0002](docs/adr/0002-graphql-over-httpx-with-gh-token.md)) and `FakeGitHub`, an in-memory GitHub. Every new gateway operation lands in both, with a `MockTransport` test for the GraphQL shape and app tests against the fake. `GraphQLGateway` refuses to build a real transport under pytest, so no test reaches GitHub. `FakeGitHub` interprets only the search syntax the app sends; teach it each new qualifier the app starts using.
 
 ### Demo recording
-`--demo` serves made-up data; record demos only in that mode, never against a real account. When the app starts using new GraphQL queries or fields, extend the demo data to match.
+`--demo` runs the app on `FakeGitHub` seeded with made-up data; record demos only in that mode, never against a real account. Extend the demo data whenever a feature needs something to show.
 
 ## Configuration
 
