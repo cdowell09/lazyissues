@@ -36,7 +36,11 @@ class FakeGitHub:
         }
 
     async def search_issues(self, query: str) -> list[Issue]:
-        return [self._current(issue) for issue in self.issues if self._matches(issue, query)]
+        try:
+            terms = shlex.split(query)
+        except ValueError as e:  # an unclosed quote
+            raise GitHubError(f"Invalid search query: {e}") from None
+        return [self._current(issue) for issue in self.issues if self._matches(issue, terms)]
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         issue = self.issues[self._index(repo, number)]
@@ -118,10 +122,10 @@ class FakeGitHub:
     def _current(self, issue: Issue) -> Issue:
         return replace(issue, closed=issue.key in self.closed)
 
-    def _matches(self, issue: Issue, query: str) -> bool:
+    def _matches(self, issue: Issue, terms: list[str]) -> bool:
         """Understands the subset of GitHub search syntax the app sends."""
         repos: list[str] = []
-        for term in shlex.split(query):
+        for term in terms:
             qualifier, _, value = term.partition(":")
             match qualifier:
                 case "is" if value == "issue":

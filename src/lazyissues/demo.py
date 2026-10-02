@@ -2,7 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
-from lazyissues.config import Config, Repo, Status
+from lazyissues.config import Config, Repo, SavedFilter, Status
+from lazyissues.discovery import STARTER_FILTERS
 from lazyissues.fake import FakeGitHub
 from lazyissues.models import Event, Issue, IssueDetail, Project, ProjectField
 
@@ -52,6 +53,10 @@ def config() -> Config:
             Status("In Review"),
         ],
         team=TEAM,
+        filters=[
+            *STARTER_FILTERS,
+            SavedFilter("Tidepool bugs", "repo:octo-dev/tidepool label:bug"),
+        ],
     )
 
 
@@ -90,11 +95,20 @@ def github() -> FakeGitHub:
             7,
             "Cache fish sightings between runs",
             "sam-reef",
+            labels=("ready-for-human",),
             project_status="Todo",
             milestone=v10,
             parent=COUNTING,
         ),
-        _issue(lantern, 9, "Count lanterns per reef", VIEWER, milestone=v10),  # not on the project
+        # Not on the project.
+        _issue(
+            lantern,
+            9,
+            "Count lanterns per reef",
+            VIEWER,
+            labels=("ready-for-human",),
+            milestone=v10,
+        ),
         _issue(
             lantern,
             11,
@@ -104,9 +118,21 @@ def github() -> FakeGitHub:
             milestone=v10,
             parent=COUNTING,
         ),
-        _issue(lantern, 13, "Pick a palette for night dives", project_status="Todo"),
         _issue(
-            tide, 10, "Tide chart renders upside down", VIEWER, closed_days_ago=2, milestone=v04
+            lantern,
+            13,
+            "Pick a palette for night dives",
+            labels=("needs-triage",),
+            project_status="Todo",
+        ),
+        _issue(
+            tide,
+            10,
+            "Tide chart renders upside down",
+            VIEWER,
+            labels=("bug",),
+            closed_days_ago=2,
+            milestone=v04,
         ),
         _issue(lantern, 2, "Import the old lantern log", VIEWER, closed_days_ago=40, milestone=v10),
     ]

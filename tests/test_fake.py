@@ -208,3 +208,8 @@ async def test_fake_lists_a_repos_milestones_counting_their_open_and_closed_issu
 async def test_fake_finds_a_milestones_issues_in_one_repo():
     found = await MILESTONED.search_issues('is:open repo:a/x milestone:"Big launch"')
     assert [issue.key for issue in found] == ["a/x#1"]
+
+
+async def test_fake_reports_a_query_it_cannot_parse_as_a_github_error():
+    with pytest.raises(GitHubError, match="quotation"):
+        await demo.github().search_issues('label:"needs triage')

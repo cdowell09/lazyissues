@@ -31,6 +31,13 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - **Team**: open issues by assignee, for everyone in `team` plus you, the busiest (most issues in an active status) first; within a person, active issues come first and done ones last
 - **Milestones**: each repo's open milestones as `repo / title`, with a bar of done (closed) issues out of all of them; under each, its open issues by status. Same-named milestones in different repos stay separate. Set `pinned_milestones` to show only those, in that order
 - **Unassigned**: open issues with no assignee, by status
+- **Filters**: your saved filters in a sidebar; `Enter` runs one and lists its issues by status, with the same search, focus, done, folding and detail keys as every list
+
+## Saved filters
+
+A saved filter is a name and a query in [GitHub's issue search syntax](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/filtering-and-searching-issues-and-pull-requests), such as `label:bug assignee:@me`. lazyissues limits it to your repos unless the query names its own `repo:`, `org:` or `user:`, and lists open issues unless it names its own `is:open`, `is:closed` or `state:` (closed results show with `d`). If GitHub rejects a query, lazyissues shows GitHub's message and carries on.
+
+In the sidebar, `n` adds a filter, `e` edits the highlighted one and `x` deletes it after you confirm; each change is saved to `config.toml` at once, keeping your comments. Each filter's results keep their own snapshot, search and folds.
 
 In every tab, a sub-issue whose parent is in the same group is indented under it (`└ lanternfish#7`); otherwise its row leads with the parent (`lanternfish#9 → lanternfish#7`). `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
 
@@ -76,6 +83,9 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `h` | detail | toggle the activity timeline |
 | `Esc` | detail | close |
 | `r` | lists | refresh the tab from GitHub |
+| `Enter` | Filters sidebar | run the highlighted filter |
+| `Tab` `Shift+Tab` | Filters | move between the sidebar and the results |
+| `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
 | `q` | anywhere | quit |
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
