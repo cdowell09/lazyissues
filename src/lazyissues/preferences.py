@@ -75,20 +75,19 @@ class PreferencesScreen(ModalScreen[Config | None]):
             yield StatusList(config.statuses)
             yield Input(placeholder="Shortcut key", max_length=1, id="key")
             yield Static("Theme", classes="heading")
-            yield OptionList(
+            themes = OptionList(
                 *(Option(name, id=name) for name in sorted(self.app.available_themes)), id="theme"
             )
+            # Here, not on mount: a highlight set on mount undid any the user (or a test)
+            # had already moved while the screen mounted.
+            themes.highlighted = themes.get_option_index(preferences.theme)
+            yield themes
             with Horizontal():
                 yield Button("Save", variant="primary", action="screen.save")
                 yield Button("Cancel", action="screen.cancel")
         yield Footer()
 
     def on_mount(self) -> None:
-        themes = self.query_one("#theme", OptionList)
-        # Quietly: the theme already shows, and a late preview of it could undo the
-        # user's first move through the list.
-        with themes.prevent(OptionList.OptionHighlighted):
-            themes.highlighted = themes.get_option_index(self.config.preferences.theme)
         self._show_key()
 
     @on(OptionList.OptionHighlighted, "#theme")
