@@ -57,11 +57,20 @@ async def click_row(pilot: Pilot, row: int, x: int = ISSUE_TEXT + 1, view: str =
 
 
 async def click_option(pilot: Pilot, options: OptionList, index: int) -> None:
-    """Click the `index`th option of a list of one-line options, scrolled into view."""
-    options.scroll_to(y=index, animate=False, immediate=True)
-    top = options.content_region.y - options.region.y
-    await pilot.click(options, offset=(2, top + index - round(options.scroll_y)))
-    await pilot.pause()
+    """Click the `index`th option of a list of one-line options, scrolled into view.
+
+    An OptionList scrolls back to its highlight whenever it's resized, which a slow
+    machine can do between this scrolling and clicking, so the click lands on another
+    option. Click again until the option is the highlighted one.
+    """
+    for _ in range(20):
+        options.scroll_to(y=index, animate=False, immediate=True)
+        top = options.content_region.y - options.region.y
+        await pilot.click(options, offset=(2, top + index - round(options.scroll_y)))
+        await pilot.pause()
+        if options.highlighted == index:
+            return
+    raise AssertionError(f"option {index} never took a click")
 
 
 async def terminal(
