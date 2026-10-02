@@ -86,6 +86,8 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `Enter` | Filters sidebar | run the highlighted filter |
 | `Tab` `Shift+Tab` | Filters | move between the sidebar and the results |
 | `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
+| `S` | anywhere | preferences |
+| `?` | anywhere | list every key |
 | `q` | anywhere | quit |
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
@@ -102,6 +104,18 @@ Each tab remembers its selection, search, status focus, done toggle, folds and r
 - Moving a closed issue to a status reopens it.
 
 The issue keeps its status until GitHub confirms the move; the list and detail show `⋯` and the move meanwhile, and an issue has one move at a time. If GitHub rejects the move, its error stays on screen until you press `Enter` or `Esc`, and `o` opens the issue in your browser. A refresh that was already running when a move was confirmed doesn't undo it.
+
+## Preferences
+
+`S` opens preferences:
+
+- **Team roster**: the GitHub logins in the Team tab, one per line
+- **Pinned milestones**: `owner/repo/title`, one per line, in the order the Milestones tab shows them
+- **Show done issues when lists open**, and the tab lazyissues **starts on**
+- **Statuses**: their order (`shift+↑`/`shift+↓`), which are active (`space`), and the highlighted status's move shortcut (the key field)
+- **Theme**: any of Textual's built-in themes, previewed as you move through the list
+
+`ctrl+s` saves to `config.toml`, keeping your comments, and applies everything at once: lists regroup, the Team tab reloads its roster. `esc` cancels and puts the saved theme back.
 
 ## Cache
 
@@ -140,6 +154,11 @@ Setup also puts you on the team roster and adds two saved filters, "Ready for me
 team = ["octo-dev", "sam-reef"]     # GitHub logins in the Team tab
 done_window_days = 14               # how far back `d` reaches for closed issues; the default
 pinned_milestones = ["octo-dev/lanternfish/v1.0"]  # owner/repo/title; Milestones shows only these
+
+[preferences]                       # every key is optional; these are the defaults
+show_done = false                   # lists start with done issues shown
+start_tab = "My Work"               # a tab's title; an unknown one starts on the first tab
+theme = "textual-dark"              # one of Textual's built-in themes
 
 [[repos]]                           # at least one
 name = "octo-dev/tidepool"

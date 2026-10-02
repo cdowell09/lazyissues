@@ -8,8 +8,9 @@ from typing import Any, Literal
 
 import platformdirs
 import tomlkit
+from textual.theme import BUILTIN_THEMES
 from tomlkit.exceptions import TOMLKitError
-from tomlkit.items import AoT
+from tomlkit.items import AoT, Table
 
 
 class ConfigError(Exception):
@@ -37,6 +38,13 @@ class SavedFilter:
 
 
 @dataclass(frozen=True)
+class Preferences:
+    show_done: bool = False  # whether lists start with done issues shown
+    start_tab: str = "My Work"  # a tab's title; an unknown one starts on the first tab
+    theme: str = "textual-dark"  # one of Textual's built-in themes
+
+
+@dataclass(frozen=True)
 class Config:
     repos: list[Repo]
     statuses: list[Status]
@@ -45,6 +53,7 @@ class Config:
     done_window_days: int = 14  # how far back shown done issues reach
     # "owner/repo/title" of the milestones the Milestones tab shows, in order; empty: all.
     pinned_milestones: list[str] = field(default_factory=list)
+    preferences: Preferences = Preferences()
 
     @property
     def repo_names(self) -> list[str]:
@@ -61,6 +70,12 @@ def config_dir() -> Path:
 def is_repo_name(name: str) -> bool:
     """Whether `name` has the `owner/name` shape of a repo in the repo set."""
     return name.count("/") == 1 and all(name.split("/"))
+
+
+def is_milestone_key(key: Any) -> bool:
+    """`owner/repo/title`; the title may itself hold `/`."""
+    parts = key.split("/", 2) if isinstance(key, str) else []
+    return len(parts) == 3 and all(parts)
 
 
 def load(path: Path) -> Config:
@@ -81,7 +96,7 @@ def load(path: Path) -> Config:
     if type(done_window_days) is not int or done_window_days < 1:
         raise ConfigError(f"{path}: `done_window_days` must be a whole number of days, 1 or more.")
     pinned = doc.get("pinned_milestones", [])
-    if not isinstance(pinned, list) or not all(map(_is_milestone_key, pinned)):
+    if not isinstance(pinned, list) or not all(map(is_milestone_key, pinned)):
         raise ConfigError(
             f'{path}: `pinned_milestones` must list milestones as "owner/repo/title",'
             ' like `pinned_milestones = ["octo/app/v1.0"]`.'
@@ -93,13 +108,24 @@ def load(path: Path) -> Config:
         filters=[_filter(path, entry) for entry in doc.get("filters", [])],
         done_window_days=done_window_days,
         pinned_milestones=pinned,
+        preferences=_preferences(path, doc.get("preferences", {})),
     )
 
 
-def _is_milestone_key(key: Any) -> bool:
-    """`owner/repo/title`; the title may itself hold `/`."""
-    parts = key.split("/", 2) if isinstance(key, str) else []
-    return len(parts) == 3 and all(parts)
+def _preferences(path: Path, entry: Any) -> Preferences:
+    if not isinstance(entry, dict):
+        raise ConfigError(f"{path}: `preferences` must be a `[preferences]` table.")
+    defaults = Preferences()
+    show_done = entry.get("show_done", defaults.show_done)
+    start_tab = entry.get("start_tab", defaults.start_tab)
+    theme = entry.get("theme", defaults.theme)
+    if not isinstance(show_done, bool):
+        raise ConfigError(f"{path}: `show_done` must be true or false.")
+    if not isinstance(start_tab, str):
+        raise ConfigError(f'{path}: `start_tab` must be a tab\'s title, like "My Work".')
+    if theme not in BUILTIN_THEMES:
+        raise ConfigError(f"{path}: `theme` must be one of {', '.join(sorted(BUILTIN_THEMES))}.")
+    return Preferences(show_done, start_tab, theme)
 
 
 def _repo(path: Path, entry: Any) -> Repo:
@@ -144,6 +170,7 @@ def save(config: Config, path: Path) -> None:
         raise ConfigError(f"{path} is not valid TOML: {e}") from None
     _set_list(doc, "team", config.team)
     _set_list(doc, "pinned_milestones", config.pinned_milestones)
+    _set_table(doc, "preferences", config.preferences)
     _set_tables(doc, "repos", config.repos)
     _set_tables(doc, "statuses", config.statuses)
     _set_tables(doc, "filters", config.filters)
@@ -183,11 +210,29 @@ def _set_tables(doc: tomlkit.TOMLDocument, key: str, records: list[Any]) -> None
         table = old.pop(record.name, None)
         if table is None:
             table = tomlkit.table()
-        # Fields at their default are left out; keys this schema doesn't know are kept.
-        for f in fields(record):
-            value = getattr(record, f.name)
-            if value == f.default:
-                table.pop(f.name, None)
-            elif table.get(f.name) != value:
-                table[f.name] = value
+        _set_fields(table, record)
         tables.append(table)
+
+
+def _set_table(doc: tomlkit.TOMLDocument, key: str, record: Any) -> None:
+    """Rewrite the `[key]` table from `record`, leaving it out while every field is a default."""
+    table = doc.get(key)
+    if not isinstance(table, Table):
+        doc.pop(key, None)
+        table = tomlkit.table()
+    _set_fields(table, record)
+    if not table:
+        doc.pop(key, None)
+    elif key not in doc:
+        doc.add(tomlkit.nl())
+        doc.add(key, table)
+
+
+def _set_fields(table: Table, record: Any) -> None:
+    """Fields at their default are left out; keys this schema doesn't know are kept."""
+    for f in fields(record):
+        value = getattr(record, f.name)
+        if value == f.default:
+            table.pop(f.name, None)
+        elif table.get(f.name) != value:
+            table[f.name] = value

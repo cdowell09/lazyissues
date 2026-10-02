@@ -1,8 +1,11 @@
+from dataclasses import replace
+
 import pytest
 
 from lazyissues.config import (
     Config,
     ConfigError,
+    Preferences,
     Repo,
     SavedFilter,
     Status,
@@ -183,3 +186,60 @@ def test_pinning_milestones_in_a_saved_config_then_unpinning_them(tmp_path):
 
     save(unpinned, path)
     assert "pinned_milestones" not in path.read_text()
+
+
+def test_loads_preferences_with_defaults(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[[repos]]\nname = "a/x"\n')
+    assert load(path).preferences == Preferences(
+        show_done=False, start_tab="My Work", theme="textual-dark"
+    )
+    path.write_text(
+        """[preferences]
+show_done = true
+start_tab = "Team"
+theme = "nord"
+
+[[repos]]
+name = "a/x"
+"""
+    )
+    config = load(path)
+    assert config.preferences == Preferences(show_done=True, start_tab="Team", theme="nord")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("preferences = 1\n", "`preferences`"),
+        ("[preferences]\nshow_done = 1\n", "`show_done`"),
+        ("[preferences]\nstart_tab = 2\n", "`start_tab`"),
+        ('[preferences]\ntheme = "no-such-theme"\n', "`theme`"),
+    ],
+)
+def test_reports_bad_preferences(tmp_path, text, message):
+    path = tmp_path / "config.toml"
+    path.write_text(text + '[[repos]]\nname = "a/x"\n')
+    with pytest.raises(ConfigError, match=message):
+        load(path)
+
+
+def test_saves_preferences_keeping_comments(tmp_path):
+    path = tmp_path / "config.toml"
+    save(CONFIG, path)
+    assert "preferences" not in path.read_text()  # defaults are left out
+
+    changed = replace(CONFIG, preferences=Preferences(show_done=True, theme="nord"))
+    save(changed, path)
+    assert load(path) == changed
+    path.write_text(path.read_text().replace("show_done", "# lists start with done\nshow_done"))
+
+    changed = replace(changed, preferences=Preferences(show_done=True, start_tab="Team"))
+    save(changed, path)
+    assert load(path) == changed
+    assert "# lists start with done\nshow_done = true" in path.read_text()
+    assert "theme" not in path.read_text()
+
+    save(CONFIG, path)
+    assert load(path) == CONFIG
+    assert "preferences" not in path.read_text()
