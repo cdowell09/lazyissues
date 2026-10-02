@@ -4,7 +4,7 @@ A fast terminal UI for GitHub Issues, with keyboard and mouse controls for daily
 
 > **Status:** early development. Nothing is installable yet. The design lives in [CONTEXT.md](https://github.com/cdowell09/lazyissues/blob/main/CONTEXT.md) (the domain language) and [docs/adr/](https://github.com/cdowell09/lazyissues/tree/main/docs/adr) (the decisions behind it).
 
-lazyissues is the GitHub counterpart of [lazyjira](https://github.com/cdowellmdb/lazyjira). It uses your existing `gh` login, opens instantly from a local cache, and refreshes in the background.
+lazyissues uses your existing `gh` login, opens instantly from a local cache, and refreshes in the background.
 
 ## Planned features
 
