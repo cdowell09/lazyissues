@@ -14,20 +14,19 @@ from lazyissues.models import Event, Issue, IssueDetail, ProjectField
 AT = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
 
-def issue(number: int, *labels: str) -> Issue:
+def issue(number: int, *labels: str, milestone: str | None = None) -> Issue:
     url = f"https://github.com/o/r/issues/{number}"
-    return Issue("o/r", number, f"Issue {number}", url, ("me",), labels)
+    return Issue("o/r", number, f"Issue {number}", url, ("me",), labels, milestone=milestone)
 
 
 def github() -> FakeGitHub:
     """My Work shows: Todo (1), r#1, Doing (2), r#2, r#3."""
     return FakeGitHub(
         viewer="me",
-        issues=[issue(1, "todo"), issue(2, "doing"), issue(3, "doing")],
+        issues=[issue(1, "todo", milestone="v1"), issue(2, "doing"), issue(3, "doing")],
         details={
             "o/r#1": IssueDetail(
                 issue(1),
-                milestone="v1",
                 body="Steps to **reproduce**",
                 parent=issue(9),
                 sub_issues=(issue(2),),

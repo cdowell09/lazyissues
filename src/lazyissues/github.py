@@ -15,6 +15,7 @@ from lazyissues.models import (
     EventKind,
     Issue,
     IssueDetail,
+    Milestone,
     Project,
     ProjectField,
     parse_key,
@@ -40,6 +41,9 @@ class Gateway(Protocol):
     async def repo_labels(self, repo: str) -> list[str]: ...
 
     async def repo_projects(self, repo: str) -> list[Project]: ...
+
+    async def repo_milestones(self, repo: str) -> list[Milestone]: ...
+
     async def project_status_options(self, project: str) -> list[str]:
         """The Status field's options of project "owner/number", in board order."""
         ...
@@ -86,6 +90,8 @@ fragment IssueFields on Issue {
   repository { nameWithOwner }
   assignees(first: 10) { nodes { login } }
   labels(first: 20) { nodes { name } }
+  milestone { title }
+  parent { number repository { nameWithOwner } }
   projectItems(first: 10) {
     nodes {
       project { number owner { ... on Actor { login } } }
@@ -118,7 +124,6 @@ query($owner: String!, $name: String!, $number: Int!) {
     issue(number: $number) {
       ...IssueFields
       body
-      milestone { title }
       parent { ...IssueFields }
       subIssues(first: 50) { nodes { ...IssueFields } }
       projectItems(first: 10) {
@@ -235,6 +240,23 @@ query($owner: String!, $name: String!) {
 }
 """
 
+_MILESTONES = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    milestones(
+      first: 100, after: $after, states: [OPEN], orderBy: {field: DUE_DATE, direction: ASC}
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        title
+        open: issues(states: OPEN) { totalCount }
+        closed: issues(states: CLOSED) { totalCount }
+      }
+    }
+  }
+}
+"""
+
 
 def _login(actor: dict[str, Any] | None) -> str:
     """GitHub shows a deleted account as `ghost`."""
@@ -267,7 +289,6 @@ def _project_fields(item: dict[str, Any]) -> list[ProjectField]:
 def _detail(node: dict[str, Any]) -> IssueDetail:
     return IssueDetail(
         issue=_issue(node),
-        milestone=node["milestone"] and node["milestone"]["title"],
         body=node["body"],
         parent=node["parent"] and _issue(node["parent"]),
         sub_issues=tuple(_issue(sub) for sub in node["subIssues"]["nodes"]),
@@ -288,8 +309,15 @@ def _issue(node: dict[str, Any]) -> Issue:
         labels=tuple(label["name"] for label in node["labels"]["nodes"]),
         closed=node["state"] == "CLOSED",
         closed_at=node["closedAt"],
+        milestone=node["milestone"] and node["milestone"]["title"],
+        parent=_parent_key(node),
         project_statuses=_project_statuses(node["projectItems"]["nodes"]),
     )
+
+
+def _parent_key(node: dict[str, Any]) -> str | None:
+    parent = node["parent"]
+    return parent and f"{parent['repository']['nameWithOwner']}#{parent['number']}"
 
 
 def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
@@ -375,6 +403,17 @@ class GraphQLGateway:
             )
             for node in data["repository"]["projectsV2"]["nodes"]
             if node and not node["closed"]
+        ]
+
+    async def repo_milestones(self, repo: str) -> list[Milestone]:
+        """`repo`'s open milestones, soonest due first, with their issue counts."""
+        owner, name = repo.split("/")
+        nodes = await self._nodes(
+            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
+        )
+        return [
+            Milestone(repo, node["title"], node["open"]["totalCount"], node["closed"]["totalCount"])
+            for node in nodes
         ]
 
     async def project_status_options(self, project: str) -> list[str]:

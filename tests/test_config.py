@@ -91,14 +91,24 @@ query = "label:ready-for-human"
     assert config.filters == [SavedFilter("Ready for me", "label:ready-for-human")]
 
 
+def test_loads_pinned_milestones_in_order(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'pinned_milestones = ["a/y/v1.0", "a/x/Big / launch"]\n[[repos]]\nname = "a/x"\n'
+    )
+    assert load(path).pinned_milestones == ["a/y/v1.0", "a/x/Big / launch"]
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [
         ('team = "me"\n[[repos]]\nname = "a/x"\n', "`team`"),
         ('[[repos]]\nname = "a/x"\n[[filters]]\nname = "x"\n', "`query`"),
+        ('pinned_milestones = ["v1"]\n[[repos]]\nname = "a/x"\n', "owner/repo/title"),
+        ('pinned_milestones = "a/x/v1"\n[[repos]]\nname = "a/x"\n', "owner/repo/title"),
     ],
 )
-def test_reports_bad_team_or_filters(tmp_path, text, message):
+def test_reports_bad_team_filters_or_pinned_milestones(tmp_path, text, message):
     path = tmp_path / "config.toml"
     path.write_text(text)
     with pytest.raises(ConfigError, match=message):
@@ -110,6 +120,7 @@ CONFIG = Config(
     statuses=[Status("Todo"), Status("In Progress", active=True, key="p")],
     team=["me"],
     filters=[SavedFilter("Needs triage", "label:needs-triage")],
+    pinned_milestones=["a/y/v1.0"],
 )
 
 
@@ -159,3 +170,16 @@ def test_a_records_comments_follow_it_when_earlier_records_go(tmp_path):
 
     assert '# work board\nname = "a/y"' in path.read_text()
     assert load(path).repo_names == ["a/y", "a/new"]
+
+
+def test_pinning_milestones_in_a_saved_config_then_unpinning_them(tmp_path):
+    path = tmp_path / "config.toml"
+    unpinned = Config(repos=[Repo("a/x")], statuses=[Status("Todo")], team=["me"])
+    save(unpinned, path)
+
+    pinned = Config(unpinned.repos, unpinned.statuses, ["me"], pinned_milestones=["a/x/v1"])
+    save(pinned, path)
+    assert load(path) == pinned
+
+    save(unpinned, path)
+    assert "pinned_milestones" not in path.read_text()

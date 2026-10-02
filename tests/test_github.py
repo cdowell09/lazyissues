@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from lazyissues.github import GitHubError, GraphQLGateway
-from lazyissues.models import Event, Issue, Project, ProjectField
+from lazyissues.models import Event, Issue, Milestone, Project, ProjectField
 
 
 def node(number: int) -> dict:
@@ -18,6 +18,8 @@ def node(number: int) -> dict:
         "labels": {"nodes": [{"name": "bug"}]},
         "state": "OPEN",
         "closedAt": None,
+        "milestone": None,
+        "parent": None,
         "projectItems": {"nodes": []},
     }
 
@@ -84,6 +86,21 @@ async def test_search_reads_state_and_each_projects_status():
     assert issue.closed
     assert issue.closed_at == "2026-09-30T12:00:00Z"
     assert issue.project_statuses == {"o/1": "In Progress"}
+
+
+async def test_search_reads_the_milestone_and_the_parent_issue():
+    sub = node(4) | {
+        "milestone": {"title": "v1"},
+        "parent": {"number": 9, "repository": {"nameWithOwner": "o/other"}},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [sub, node(5)]}
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    issues = await gateway(handler).search_issues("x")
+
+    assert [(i.milestone, i.parent) for i in issues] == [("v1", "o/other#9"), (None, None)]
 
 
 def at(minute: int) -> datetime:
@@ -165,7 +182,7 @@ async def test_issue_detail_builds_body_hierarchy_project_fields_and_activity():
     assert detail.issue.closed
     assert detail.issue.project_statuses == {"o/2": "Todo"}
     assert detail.body == "Steps:\n\n1. Open"
-    assert detail.milestone == "v1"
+    assert detail.issue.milestone == "v1"
     assert detail.parent is not None
     assert detail.parent.key == "o/r#1"
     assert [sub.number for sub in detail.sub_issues] == [6, 7]
@@ -198,7 +215,7 @@ async def test_issue_detail_of_an_open_issue_without_extras():
 
     detail = await gateway(handler).issue_detail("o/r", 5)
 
-    assert (detail.milestone, detail.parent, detail.activity) == (None, None, ())
+    assert (detail.issue.milestone, detail.parent, detail.activity) == (None, None, ())
 
 
 async def test_graphql_errors_raise():
@@ -292,3 +309,33 @@ async def test_repo_projects_lists_open_projects_with_status_options_in_board_or
         Project("o/3", "Board 3"),
     ]
     assert sent == [{"owner": "o", "name": "r"}]
+
+
+async def test_repo_milestones_lists_open_milestones_with_open_and_closed_issue_counts():
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body["variables"])
+        assert "states: [OPEN]" in body["query"]
+        last = body["variables"]["after"] == "c1"
+        milestones = {
+            "pageInfo": {"hasNextPage": not last, "endCursor": None if last else "c1"},
+            "nodes": [
+                {
+                    "title": "v2" if last else "v1",
+                    "open": {"totalCount": 3},
+                    "closed": {"totalCount": 0 if last else 5},
+                }
+            ],
+        }
+        return httpx.Response(200, json={"data": {"repository": {"milestones": milestones}}})
+
+    assert await gateway(handler).repo_milestones("o/r") == [
+        Milestone("o/r", "v1", open=3, closed=5),
+        Milestone("o/r", "v2", open=3, closed=0),
+    ]
+    assert sent == [
+        {"owner": "o", "name": "r", "after": None},
+        {"owner": "o", "name": "r", "after": "c1"},
+    ]

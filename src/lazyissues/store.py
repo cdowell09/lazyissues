@@ -16,7 +16,7 @@ from lazyissues.move_tracker import MoveTracker
 
 # Bump whenever `Issue` changes shape. Snapshots store `Issue` fields as JSON, so
 # they must stay strings, numbers, booleans, None, or tuples and dicts of those.
-SNAPSHOT_VERSION = 3
+SNAPSHOT_VERSION = 4
 
 # The clock reads are stamped with when requested, and moves with when confirmed:
 # monotonic, and fine-grained on Windows too.

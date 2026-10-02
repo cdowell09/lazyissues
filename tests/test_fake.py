@@ -6,7 +6,7 @@ import pytest
 from lazyissues import demo
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import CloseReason, Issue, IssueDetail, Project
+from lazyissues.models import CloseReason, Issue, IssueDetail, Milestone, Project
 
 
 async def test_fake_understands_the_queries_the_app_sends():
@@ -179,3 +179,32 @@ async def test_fake_rejects_writes_to_a_read_only_repo():
     with pytest.raises(GitHubError, match="Resource not accessible"):
         await github.add_label("o/r", 1, "Todo")
     assert (await found(github, 1)).labels == ("bug", "todo")
+
+
+def in_milestone(number: int, repo: str, milestone: str, closed: bool = False) -> Issue:
+    return Issue(repo, number, "One", "u", closed=closed, milestone=milestone)
+
+
+MILESTONED = FakeGitHub(
+    viewer="me",
+    issues=[
+        in_milestone(1, "a/x", "Big launch"),
+        in_milestone(2, "a/x", "Big launch", closed=True),
+        in_milestone(3, "a/x", "Big launch", closed=True),
+        in_milestone(4, "a/y", "Big launch"),
+        in_milestone(5, "a/x", "Later"),
+    ],
+    milestones={"a/x": ["Big launch", "Empty"], "a/y": ["Big launch"]},
+)
+
+
+async def test_fake_lists_a_repos_milestones_counting_their_open_and_closed_issues():
+    assert await MILESTONED.repo_milestones("a/x") == [
+        Milestone("a/x", "Big launch", open=1, closed=2),
+        Milestone("a/x", "Empty"),
+    ]
+
+
+async def test_fake_finds_a_milestones_issues_in_one_repo():
+    found = await MILESTONED.search_issues('is:open repo:a/x milestone:"Big launch"')
+    assert [issue.key for issue in found] == ["a/x#1"]

@@ -40,11 +40,11 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
             "lanternfish#4",
             "tidepool#12",
             "lanternfish#9",
+            "└ lanternfish#11",  # a sub-issue under its parent
             "tidepool#15 ⚠",
-            "lanternfish#11",
             "sam-reef (2)",  # one active issue
             "lanternfish#4",  # shared with the viewer
-            "lanternfish#7",
+            "lanternfish#9 → lanternfish#7",  # its parent is in another group
             "mo-kelp (0)",  # on the roster with nothing assigned
         ]
 
@@ -135,3 +135,23 @@ async def test_enter_opens_the_detail_from_any_list_tab():
         await pilot.pause()
         assert isinstance(app.screen, IssueDetailScreen)
         assert app.screen.issues[app.screen.index].key == "octo-dev/lanternfish#4"
+
+
+async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await open_tab(pilot, "team")
+        await pilot.press("down", "down", "down", "down", "z")  # on lanternfish#11
+        assert firsts(app, "team")[:5] == [
+            "octo-dev (5)",
+            "lanternfish#4",
+            "tidepool#12",
+            "▸ lanternfish#9",
+            "tidepool#15 ⚠",
+        ]
+        table = app.query_one("#team DataTable", DataTable)
+        assert str(table.get_row_at(table.cursor_row)[0]) == "▸ lanternfish#9"
+
+        await pilot.press("z")  # on the parent unfolds it
+        assert firsts(app, "team")[4] == "└ lanternfish#11"

@@ -18,8 +18,8 @@ Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platform
 
 - **`__main__`**: CLI; loads config and the `gh` token before the TUI takes the terminal, so errors print normally; runs setup first when there is no config
 - **`app`**: the Textual app shell; `tabs()` lists one view per tab
-- **`views/`**: one module per tab. List tabs subclass `views.issue_list.IssueList` and supply only their search (`QUERY`, or `queries()`) and `grouping()`; `IssueList` owns the tab's store, refresh, view state (search, status focus, done, folds, repo filter), Enter-to-detail and drawing, and hosts `m` and status shortcut keys for moves
-- **`view_model`**: pure, no Textual: `visible_groups(issues, grouping, rules, state)` turns issues and a tab's `ViewState` into the groups and rows it shows; `by_status` and `by_assignee` are the groupings. Put list filtering and grouping here, tested without the UI
+- **`views/`**: one module per tab. List tabs subclass `views.issue_list.IssueList` and supply only their search (`QUERY`, or `queries()`) and `grouping()`, and may add to a group's `header()` (Milestones adds its progress bar); `IssueList` owns the tab's store, refresh, view state (search, status focus, done, folds, repo filter), Enter-to-detail and drawing, and hosts `m` and status shortcut keys for moves
+- **`view_model`**: pure, no Textual: `visible_groups(issues, grouping, rules, state)` turns issues and a tab's `ViewState` into the groups and rows it shows, each `Row` with its sub-issue nesting and parent fold; `by_status`, `by_assignee` and `by_milestone` are the groupings; `pinned` picks config's pinned milestones and `progress_bar` draws a milestone's progress. Put list filtering, grouping and nesting here, tested without the UI
 - **`detail`**: `IssueDetailScreen`, the issue detail and activity any view opens over its list; it takes the list's issues, the selected index and a `select` callback, so it never depends on which tab opened it; `m` moves its issue too
 - **`move_planner`**: pure: `Planner(rules, viewer, project_options)` gives an issue's `targets()` and `plan(issue, target)`, the steps (gateway calls) of a move or a `Skip` reason; each step's `apply` gives the issue once GitHub confirms, and `send` runs a plan. A bulk move plans each issue on its own
 - **`move_tracker`**: pure: `MoveTracker` holds pending, confirmed and rejected moves; `settle(issue, requested_at)` is the stale-read rule every read of a status goes through (ADR 0003)
@@ -28,7 +28,7 @@ Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platform
 - **`github`**: the gateway protocol and its GraphQL implementation; `gh_token`
 - **`fake`**: `FakeGitHub`, the in-memory gateway for tests and `--demo`
 - **`demo`**: made-up config and data for `--demo`
-- **`models`**: domain records (`Issue`, `Project`, and `IssueDetail` with its `Event` activity and `ProjectField` values)
+- **`models`**: domain records (`Issue` with its milestone and parent key, `Milestone`, `Project`, and `IssueDetail` with its `Event` activity and `ProjectField` values)
 - **`statuses`**: `StatusRules`, the only code that interprets statuses: resolves an issue's status from its repo's status source, groups issues in display order (a closed issue's status is Done, last), answers done and active, lists the statuses a move can reach (`reachable`); `is_done_option` for project options that mean done
 - **`store`**: `IssueStore`, the loaded issues and their snapshot in the platform cache dir, one per view and repo set; `refresh` stamps each read with when it was requested, and `replace` ignores a read older than the one applied and settles each issue through the app's shared `MoveTracker`; `now` is the clock for both
 - **`search`**: scoping search queries to the repo set

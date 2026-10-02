@@ -59,7 +59,7 @@ def _detail_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     ]
     if detail is None:  # only the list's copy so far
         return [_fields(fields)]
-    fields.append(("Milestone", detail.milestone or "-"))
+    fields.append(("Milestone", detail.issue.milestone or "-"))
     if detail.parent:
         fields.append(("Parent", _issue_line(detail.parent)))
     fields += [(f"{field.name} ({field.project})", field.value) for field in detail.project_fields]
