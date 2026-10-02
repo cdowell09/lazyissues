@@ -61,7 +61,7 @@ class IssueList(Widget):
     ]
 
     LABEL: ClassVar[str]  # the tab's title
-    QUERY: ClassVar[str]  # GitHub search for the tab, without `is:open`/`is:closed`
+    QUERY: ClassVar[str]  # GitHub search for the tab; states are added unless it names one
     EMPTY: ClassVar[str]  # shown when the tab has no issues at all
 
     refreshing = var(False)
@@ -86,6 +86,7 @@ class IssueList(Widget):
         self.rules = StatusRules(config)
         # Each table row's group, and its issue's row (None for a header or the empty message).
         self._rows: list[tuple[str, Row | None]] = []
+        self.error: str | None = None  # why the latest refresh failed
 
     @property
     def issues(self) -> list[Issue]:
@@ -133,22 +134,23 @@ class IssueList(Widget):
                 if with_done or not self.state.show_done:
                     break  # otherwise done was shown mid-read, so read the done issues too
         except GitHubError as e:
+            self.error = f"Couldn't refresh: {e}"
             title = f"Couldn't refresh {self.LABEL}"
             self.notify(str(e), title=title, severity="error", timeout=10)
-            return
+        else:
+            self.error = None
         finally:
             self.refreshing = False
         self.show()
 
     async def _read(self, with_done: bool) -> list[Issue]:
-        states = ["is:open"]
+        since = None
         if with_done:
             since = datetime.now(UTC).date() - timedelta(days=self.config.done_window_days)
-            states.append(f"is:closed closed:>={since.isoformat()}")
         searches = [
-            self.github.search_issues(search.scoped(f"{query} {state}", self.config.repo_names))
-            for query in await self.queries()
-            for state in states
+            self.github.search_issues(search.scoped(query, self.config.repo_names))
+            for tab_query in await self.queries()
+            for query in search.with_states(tab_query, since)
         ]
         found = await asyncio.gather(*searches)
         return list({issue.key: issue for issues in found for issue in issues}.values())
@@ -172,7 +174,8 @@ class IssueList(Widget):
                 table.add_row(*self._cells(listed), key=key)
                 self._rows.append((group.name, listed))
         if not groups:
-            message = "No issues match." if self.state.filtering else self.EMPTY
+            # With nothing loaded, a failed refresh's error stays after its toast goes.
+            message = "No issues match." if self.state.filtering else self.error or self.EMPTY
             table.add_row("", message, *[""] * (len(COLUMNS) - 2))
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)

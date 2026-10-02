@@ -33,7 +33,7 @@ def main() -> None:
         config = SetupApp(GraphQLGateway(token), path).run()
         if config is None:
             sys.exit("lazyissues: setup quit before saving. Run lazyissues again to finish it.")
-    LazyIssuesApp(config, GraphQLGateway(token), cache_dir()).run()
+    LazyIssuesApp(config, GraphQLGateway(token), cache_dir(), config_path=path).run()
 
 
 if __name__ == "__main__":

@@ -86,6 +86,16 @@ def test_without_a_config_setup_runs_then_the_app_starts_with_its_config(launch,
     assert launch == [("setup", tmp_path / "config.toml"), ("app", demo.config())]
 
 
+def test_the_app_saves_to_the_config_it_was_started_with(launch, monkeypatch, tmp_path):
+    path = tmp_path / "config.toml"
+    __main__.config_module.save(demo.config(), path)
+    monkeypatch.setattr(
+        __main__.LazyIssuesApp, "run", lambda self: launch.append(("app", self.config_path))
+    )
+    __main__.main()
+    assert launch == [("app", path)]
+
+
 def test_quitting_setup_starts_nothing(launch, monkeypatch):
     monkeypatch.setattr(__main__.SetupApp, "run", lambda self: None)
     with pytest.raises(SystemExit, match="setup"):
