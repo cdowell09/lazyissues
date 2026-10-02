@@ -93,8 +93,13 @@ class PreferencesScreen(ModalScreen[Config | None]):
 
     @on(OptionList.OptionHighlighted, "#theme")
     def preview_theme(self, event: OptionList.OptionHighlighted) -> None:
-        assert event.option.id is not None
-        self.app.theme = event.option.id
+        # The highlight as it is now, not the event's: an event that arrives late (a slow
+        # machine) mustn't preview a theme the highlight has already left.
+        themes = event.option_list
+        if themes.highlighted is not None:
+            theme = themes.get_option_at_index(themes.highlighted).id
+            assert theme is not None
+            self.app.theme = theme
 
     @on(StatusList.SelectionHighlighted)
     def _show_key(self) -> None:

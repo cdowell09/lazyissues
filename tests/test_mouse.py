@@ -312,7 +312,7 @@ async def test_preferences_options_checkboxes_and_buttons_are_clickable():
         preferences = app.screen
         theme = sorted(app.available_themes)[0]
         await click_option(pilot, preferences.query_one("#theme", OptionList), 0)
-        assert app.theme == theme  # previewed
+        await until(pilot, lambda: app.theme == theme)  # previewed; the message can lag on CI
         await click_option(pilot, preferences.query_one(StatusList), 0)  # Todo, now active
         await pilot.click("#show-done")
         await pilot.click("Button.-primary")  # Save

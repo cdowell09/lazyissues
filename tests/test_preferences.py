@@ -103,7 +103,10 @@ async def highlight_theme(pilot: Pilot, theme: str) -> None:
     themes = pilot.app.screen.query_one("#theme", OptionList)
     themes.focus()
     themes.highlighted = themes.get_option_index(theme)
-    await pilot.pause()
+    for _ in range(100):  # the preview follows a message, which can lag on slow CI
+        await pilot.pause()
+        if pilot.app.theme == theme:
+            return
 
 
 async def test_saving_preferences_writes_config_and_applies_them_at_once(tmp_path):
