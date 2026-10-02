@@ -1,8 +1,10 @@
 """Made-up data for `--demo`. Never real accounts or repositories."""
 
+from datetime import UTC, datetime
+
 from lazyissues.config import Config, Repo, Status
 from lazyissues.fake import FakeGitHub
-from lazyissues.models import Issue
+from lazyissues.models import Event, Issue, IssueDetail, ProjectField
 
 VIEWER = "octo-dev"
 REPOS = ["octo-dev/tidepool", "octo-dev/lanternfish"]
@@ -42,36 +44,111 @@ def config() -> Config:
 
 def github() -> FakeGitHub:
     tide, lantern = REPOS
-    return FakeGitHub(
-        viewer=VIEWER,
-        issues=[
-            _issue(
-                tide,
-                12,
-                "Sync stalls when the tide table is empty",
+    issues = [
+        _issue(
+            tide,
+            12,
+            "Sync stalls when the tide table is empty",
+            VIEWER,
+            labels=("bug", "in-progress"),
+        ),
+        _issue(
+            tide,
+            15,
+            "Add a weekly digest of high tides",
+            VIEWER,
+            labels=("enhancement", "todo", "in-review"),  # two status labels
+        ),
+        _issue(tide, 18, "Document the import format", labels=("documentation",)),
+        _issue(
+            lantern,
+            4,
+            "Lantern glow ignores the dark theme",
+            VIEWER,
+            "sam-reef",
+            project_status="In Progress",
+        ),
+        _issue(lantern, 7, "Cache fish sightings between runs", "sam-reef", project_status="Todo"),
+        _issue(lantern, 9, "Count lanterns per reef", VIEWER),  # not on the project
+        _issue(lantern, 11, "Wait for the depth sensor API", VIEWER, project_status="Blocked"),
+    ]
+    return FakeGitHub(viewer=VIEWER, issues=issues, details=_details(issues))
+
+
+def _at(day: int, hour: int) -> datetime:
+    return datetime(2026, 9, day, hour, tzinfo=UTC)
+
+
+def _details(issues: list[Issue]) -> dict[str, IssueDetail]:
+    """Bodies, comments, activity and hierarchy for a few issues; the rest have none."""
+    tide12, tide15, _, lantern4, lantern7, lantern9, lantern11 = issues
+    theme = "Night mode"
+    sync_bug = IssueDetail(
+        tide12,
+        milestone="v0.4",
+        body=(
+            "Syncing hangs forever when the station returns an empty tide table.\n\n"
+            "**Steps**\n\n"
+            "1. Point `tidepool` at a station with no readings\n"
+            "2. Run `tidepool sync`\n\n"
+            "```text\nsyncing station 9414290... (no progress)\n```\n\n"
+            "Expected: a warning and an empty table."
+        ),
+        activity=(
+            Event("sam-reef", _at(1, 9), "labeled", "bug"),
+            Event("sam-reef", _at(1, 9), "milestoned", "v0.4"),
+            Event("sam-reef", _at(1, 10), "commented", "Reproduced on station 9414290."),
+            Event(VIEWER, _at(2, 14), "assigned", VIEWER),
+            Event(VIEWER, _at(2, 14), "labeled", "in-progress"),
+            Event(
                 VIEWER,
-                labels=("bug", "in-progress"),
+                _at(3, 11),
+                "commented",
+                "The pager loops on an empty `next` cursor. Fix:\n\n"
+                "```python\nif not page.next:\n    break\n```",
             ),
-            _issue(
-                tide,
-                15,
-                "Add a weekly digest of high tides",
-                VIEWER,
-                labels=("enhancement", "todo", "in-review"),  # two status labels
-            ),
-            _issue(tide, 18, "Document the import format", labels=("documentation",)),
-            _issue(
-                lantern,
-                4,
-                "Lantern glow ignores the dark theme",
-                VIEWER,
-                "sam-reef",
-                project_status="In Progress",
-            ),
-            _issue(
-                lantern, 7, "Cache fish sightings between runs", "sam-reef", project_status="Todo"
-            ),
-            _issue(lantern, 9, "Count lanterns per reef", VIEWER),  # not on the project
-            _issue(lantern, 11, "Wait for the depth sensor API", VIEWER, project_status="Blocked"),
-        ],
+        ),
     )
+    digest = IssueDetail(
+        tide15,
+        body="A Monday email listing the week's three highest tides per station.",
+        activity=(
+            Event(VIEWER, _at(4, 8), "labeled", "todo"),
+            Event(VIEWER, _at(5, 16), "closed", "not planned"),
+            Event("sam-reef", _at(6, 9), "reopened"),
+            Event("sam-reef", _at(6, 9), "commented", "Users asked for this again; reopening."),
+            Event(VIEWER, _at(7, 10), "labeled", "in-review"),
+        ),
+    )
+    glow = IssueDetail(
+        lantern4,
+        body="The glow stays bright yellow in the dark theme. It should dim to amber.",
+        project_fields=(
+            ProjectField("Lanternfish board", "Status", "In Progress"),
+            ProjectField("Lanternfish board", "Theme", theme),
+            ProjectField("Lanternfish board", "Iteration", "Sprint 7"),
+        ),
+        activity=(
+            Event(VIEWER, _at(8, 9), "assigned", "sam-reef"),
+            Event(VIEWER, _at(8, 9), "assigned", VIEWER),
+            Event("sam-reef", _at(9, 15), "commented", "Screenshot attached on the board."),
+        ),
+    )
+    counting = IssueDetail(
+        lantern9,
+        body="Track how many lanterns each reef has.\n\n- [x] Schema\n- [ ] Sightings import",
+        sub_issues=(lantern7, lantern11),
+    )
+    sightings = IssueDetail(lantern7, parent=lantern9)
+    sensor = IssueDetail(
+        lantern11,
+        body="Blocked until the depth sensor API ships its `v2` endpoint.",
+        parent=lantern9,
+        project_fields=(
+            ProjectField("Lanternfish board", "Status", "Blocked"),
+            ProjectField("Lanternfish board", "Theme", theme),
+        ),
+    )
+    return {
+        detail.issue.key: detail for detail in (sync_bug, digest, glow, counting, sightings, sensor)
+    }

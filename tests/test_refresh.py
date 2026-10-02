@@ -9,7 +9,7 @@ from textual.widgets import DataTable
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.github import Gateway, GitHubError
-from lazyissues.models import Issue
+from lazyissues.models import Issue, IssueDetail
 from lazyissues.store import IssueStore
 
 MY_DEMO_ISSUES = [  # in display order, by status group
@@ -32,9 +32,15 @@ class Gated:
         await self.gate.wait()
         return await self.github.search_issues(query)
 
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+        return await self.github.issue_detail(repo, number)
+
 
 class Unreachable:
     async def search_issues(self, query: str) -> list[Issue]:
+        raise GitHubError("Couldn't reach GitHub: timed out")
+
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         raise GitHubError("Couldn't reach GitHub: timed out")
 
 
@@ -54,7 +60,6 @@ def selected(app: App) -> str | None:
 
 async def select(pilot: Pilot, key: str) -> None:
     """Move the cursor down to the issue `key`, as a user would."""
-    await pilot.press("tab")
     for _ in range(table(pilot.app).row_count):
         if selected(pilot.app) == key:
             return

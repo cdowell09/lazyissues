@@ -44,3 +44,12 @@ def test_bad_config_exits_before_the_tui_starts(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["lazyissues"])
     with pytest.raises(SystemExit, match="No config"):
         __main__.main()
+
+
+async def test_my_work_fills_the_space_under_the_tabs():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        # Header, tab bar and footer take 4 rows; My Work gets the rest.
+        assert app.query_one("#my-work").region.height == 20

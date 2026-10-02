@@ -50,10 +50,19 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 
 ## Keys
 
-| Key | Action |
-| --- | --- |
-| `r` | Refresh from GitHub |
-| `q` | Quit |
+| Key | Where | Action |
+| --- | --- | --- |
+| `↑` `↓` | lists | select an issue |
+| `Enter` | lists | open the issue detail |
+| `←` `→` | detail | previous or next issue in the list underneath |
+| `z` | detail | toggle full screen |
+| `o` | detail | open the issue in your browser |
+| `h` | detail | toggle the activity timeline |
+| `Esc` | detail | close |
+| `r` | lists | refresh from GitHub |
+| `q` | anywhere | quit |
+
+The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
 ## Cache
 

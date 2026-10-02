@@ -8,7 +8,9 @@ from textual.widgets import DataTable, Static
 
 from lazyissues import search
 from lazyissues.config import Config
+from lazyissues.detail import IssueDetailScreen
 from lazyissues.github import Gateway, GitHubError
+from lazyissues.models import Issue, IssueDetail
 from lazyissues.statuses import StatusRules
 from lazyissues.store import IssueStore
 
@@ -23,12 +25,20 @@ class MyWork(Widget):
 
     refreshing = var(False)
 
-    def __init__(self, config: Config, github: Gateway, store: IssueStore) -> None:
+    def __init__(
+        self,
+        config: Config,
+        github: Gateway,
+        store: IssueStore,
+        details: dict[str, IssueDetail],
+    ) -> None:
         super().__init__(id="my-work")
         self.config = config
         self.github = github
         self.store = store
+        self.details = details
         self.rules = StatusRules(config)
+        self.issues: list[Issue] = []  # as listed, without the group header rows
 
     def compose(self) -> ComposeResult:
         yield DataTable(cursor_type="row")
@@ -69,7 +79,9 @@ class MyWork(Widget):
         if table.rows:
             selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         table.clear()
+        self.issues = []
         for group in self.rules.group(issues):
+            self.issues += group.issues
             table.add_row(Text(f"{group.name} ({len(group.issues)})", style="bold"), "", "", "")
             for issue in group.issues:
                 marker = " ⚠" if self.rules.status_of(issue).ambiguous else ""
@@ -85,3 +97,17 @@ class MyWork(Widget):
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)
         table.move_cursor(row=row)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        keys = [issue.key for issue in self.issues]
+        if event.row_key.value in keys:  # not a group header
+            index = keys.index(event.row_key.value)
+            self.app.push_screen(
+                IssueDetailScreen(self.github, self.details, self.issues, index, self.select)
+            )
+
+    def select(self, issue: Issue) -> None:
+        """Move the cursor to `issue`, if a refresh hasn't dropped it from the list."""
+        table = self.query_one(DataTable)
+        if issue.key in table.rows:
+            table.move_cursor(row=table.get_row_index(issue.key))
