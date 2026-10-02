@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from lazyissues.config import Config, Repo, Status
 from lazyissues.fake import FakeGitHub
-from lazyissues.models import Event, Issue, IssueDetail, ProjectField
+from lazyissues.models import Event, Issue, IssueDetail, Project, ProjectField
 
 VIEWER = "octo-dev"
 REPOS = ["octo-dev/tidepool", "octo-dev/lanternfish"]
@@ -72,7 +72,17 @@ def github() -> FakeGitHub:
         _issue(lantern, 9, "Count lanterns per reef", VIEWER),  # not on the project
         _issue(lantern, 11, "Wait for the depth sensor API", VIEWER, project_status="Blocked"),
     ]
-    return FakeGitHub(viewer=VIEWER, issues=issues, details=_details(issues))
+    board = Project(PROJECT, "Lanternfish board", ("Todo", "In Progress", "Blocked", "Done"))
+    return FakeGitHub(
+        viewer=VIEWER,
+        issues=issues,
+        details=_details(issues),
+        labels={
+            tide: ["bug", "documentation", "enhancement", "in-progress", "in-review", "todo"],
+            lantern: ["bug", "needs-triage", "ready-for-human"],
+        },
+        projects={lantern: [board]},
+    )
 
 
 def _at(day: int, hour: int) -> datetime:

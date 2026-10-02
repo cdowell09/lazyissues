@@ -75,3 +75,12 @@ class IssueDetail:
     @property
     def comments(self) -> tuple[Event, ...]:
         return tuple(event for event in self.activity if event.kind == "commented")
+
+
+@dataclass(frozen=True)
+class Project:
+    """A GitHub Project linked to a repository."""
+
+    ref: str  # "owner/number", as config's `project`
+    title: str
+    status_options: tuple[str, ...] = ()  # its Status field's options, in board order

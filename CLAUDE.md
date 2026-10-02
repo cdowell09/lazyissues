@@ -16,18 +16,20 @@ Supported platforms are macOS, Linux and Windows. Reach for `pathlib`, `platform
 
 ## Architecture
 
-- **`__main__`**: CLI; loads config and the `gh` token before the TUI takes the terminal, so errors print normally
+- **`__main__`**: CLI; loads config and the `gh` token before the TUI takes the terminal, so errors print normally; runs setup first when there is no config
 - **`app`**: the Textual app shell; `tabs()` lists one view per tab
 - **`views/`**: one module per tab; each view owns its loading and rendering
 - **`detail`**: `IssueDetailScreen`, the issue detail and activity any view opens over its list; it takes the list's issues, the selected index and a `select` callback, so it never depends on which tab opened it
 - **`github`**: the gateway protocol and its GraphQL implementation; `gh_token`
 - **`fake`**: `FakeGitHub`, the in-memory gateway for tests and `--demo`
 - **`demo`**: made-up config and data for `--demo`
-- **`models`**: domain records (`Issue`, and `IssueDetail` with its `Event` activity and `ProjectField` values)
-- **`statuses`**: `StatusRules`, the only code that interprets statuses: resolves an issue's status from its repo's status source, groups issues in display order, answers done and active
+- **`models`**: domain records (`Issue`, `Project`, and `IssueDetail` with its `Event` activity and `ProjectField` values)
+- **`statuses`**: `StatusRules`, the only code that interprets statuses: resolves an issue's status from its repo's status source, groups issues in display order, answers done and active; `is_done_option` for project options that mean done
 - **`store`**: `IssueStore`, the loaded issues and their snapshot in the platform cache dir, one per repo set; `refresh` stamps each read with when it was requested, and `replace` ignores a read older than the one applied
 - **`search`**: scoping search queries to the repo set
-- **`config`**: `config.toml` location and loading
+- **`config`**: `config.toml` location, loading, and `save()` (rewrites in place with `tomlkit`, keeping the user's comments)
+- **`discovery`**: first-run discovery: `discover()` builds a `Proposal` (repos, status sources, statuses, roster, starter filters) from the gateway; owns every setup suggestion rule
+- **`setup`**: `SetupApp`, the first-run screens; they only edit a `Proposal`, then save it and exit with the `Config`
 
 ## Domain and decisions
 

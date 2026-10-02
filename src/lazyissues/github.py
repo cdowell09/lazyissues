@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from lazyissues.models import Event, EventKind, Issue, IssueDetail, ProjectField
+from lazyissues.models import Event, EventKind, Issue, IssueDetail, Project, ProjectField
 
 API_URL = "https://api.github.com/graphql"
 SEARCH_LIMIT = 1000  # GitHub search never returns more than this
@@ -23,6 +23,12 @@ class Gateway(Protocol):
     async def search_issues(self, query: str) -> list[Issue]: ...
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail: ...
+
+    async def whoami(self) -> tuple[str, set[str]]: ...
+
+    async def repo_labels(self, repo: str) -> list[str]: ...
+
+    async def repo_projects(self, repo: str) -> list[Project]: ...
 
 
 def gh_token() -> str:
@@ -132,6 +138,34 @@ _EVENTS: dict[str, tuple[EventKind, Callable[[dict[str, Any]], str | None]]] = {
 }
 
 
+_VIEWER = "query { viewer { login } }"
+
+_LABELS = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    labels(first: 100, after: $after, orderBy: {field: NAME, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { name }
+    }
+  }
+}
+"""
+
+_PROJECTS = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    projectsV2(first: 20) {
+      nodes {
+        number title closed
+        owner { ... on Actor { login } }
+        field(name: "Status") { ... on ProjectV2SingleSelectField { options { name } } }
+      }
+    }
+  }
+}
+"""
+
+
 def _login(actor: dict[str, Any] | None) -> str:
     """GitHub shows a deleted account as `ghost`."""
     return actor["login"] if actor else "ghost"
@@ -208,6 +242,10 @@ class GraphQLGateway:
         )
 
     async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
+        return (await self._send(query, **variables))[0]
+
+    async def _send(self, query: str, **variables: Any) -> tuple[dict[str, Any], httpx.Headers]:
+        """The query's data, and the response headers."""
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}
@@ -221,20 +259,53 @@ class GraphQLGateway:
         body = response.json()
         if errors := body.get("errors"):
             raise GitHubError("; ".join(e["message"] for e in errors))
-        return body["data"]
+        return body["data"], response.headers
 
-    async def search_issues(self, query: str) -> list[Issue]:
-        issues: list[Issue] = []
+    async def _nodes(
+        self, query: str, connection: Callable[[dict[str, Any]], Any], **variables: Any
+    ) -> list[dict[str, Any]]:
+        """Every node of a paged connection, which `connection` picks out of the data."""
+        nodes: list[dict[str, Any]] = []
         after = None
-        while len(issues) < SEARCH_LIMIT:
-            page = (await self._query(_SEARCH, q=query, after=after))["search"]
-            issues += [_issue(node) for node in page["nodes"] if node]
+        while len(nodes) < SEARCH_LIMIT:
+            page = connection(await self._query(query, after=after, **variables))
+            nodes += [node for node in page["nodes"] if node]
             if not page["pageInfo"]["hasNextPage"]:
                 break
             after = page["pageInfo"]["endCursor"]
-        return issues
+        return nodes
+
+    async def search_issues(self, query: str) -> list[Issue]:
+        return [_issue(node) for node in await self._nodes(_SEARCH, lambda d: d["search"], q=query)]
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
         data = await self._query(_DETAIL, owner=owner, name=name, number=number)
         return _detail(data["repository"]["issue"])
+
+    async def whoami(self) -> tuple[str, set[str]]:
+        """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
+        data, headers = await self._send(_VIEWER)
+        scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
+        return data["viewer"]["login"], scopes - {""}
+
+    async def repo_labels(self, repo: str) -> list[str]:
+        owner, name = repo.split("/")
+        labels = await self._nodes(
+            _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
+        )
+        return [label["name"] for label in labels]
+
+    async def repo_projects(self, repo: str) -> list[Project]:
+        """The open projects linked to `repo`."""
+        owner, name = repo.split("/")
+        data = await self._query(_PROJECTS, owner=owner, name=name)
+        return [
+            Project(
+                f"{_login(node['owner'])}/{node['number']}",
+                node["title"],
+                tuple(option["name"] for option in (node["field"] or {}).get("options", [])),
+            )
+            for node in data["repository"]["projectsV2"]["nodes"]
+            if node and not node["closed"]
+        ]

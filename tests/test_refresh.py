@@ -8,7 +8,8 @@ from textual.widgets import DataTable
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
-from lazyissues.github import Gateway, GitHubError
+from lazyissues.fake import FakeGitHub
+from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.store import IssueStore
 
@@ -21,22 +22,19 @@ MY_DEMO_ISSUES = [  # in display order, by status group
 ]
 
 
-class Gated:
-    """A gateway whose searches wait until the test opens the gate."""
+class Gated(FakeGitHub):
+    """A fake GitHub, seeded from `github`, whose searches wait until the test opens the gate."""
 
-    def __init__(self, github: Gateway) -> None:
-        self.github = github
+    def __init__(self, github: FakeGitHub) -> None:
+        super().__init__(**vars(github))
         self.gate = asyncio.Event()
 
     async def search_issues(self, query: str) -> list[Issue]:
         await self.gate.wait()
-        return await self.github.search_issues(query)
-
-    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
-        return await self.github.issue_detail(repo, number)
+        return await super().search_issues(query)
 
 
-class Unreachable:
+class Unreachable(FakeGitHub):
     async def search_issues(self, query: str) -> list[Issue]:
         raise GitHubError("Couldn't reach GitHub: timed out")
 
@@ -111,7 +109,7 @@ async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_
     store = IssueStore(tmp_path / "snapshot.json")
     store.replace(await demo.github().search_issues("assignee:@me"), requested_at=0.0)
 
-    app = LazyIssuesApp(demo.config(), Unreachable(), store)
+    app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), store)
     async with app.run_test(notifications=True) as pilot:
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()

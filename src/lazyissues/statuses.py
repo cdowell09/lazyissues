@@ -14,6 +14,14 @@ def normalize(name: str) -> str:
     return re.sub(r"[-_\s]+", " ", name).strip().casefold()
 
 
+_DONE_OPTIONS = {"done", "closed", "complete", "completed"}
+
+
+def is_done_option(name: str) -> bool:
+    """Whether a project Status option means done, so it is reached by closing, not a move."""
+    return normalize(name) in _DONE_OPTIONS
+
+
 @dataclass(frozen=True)
 class IssueStatus:
     name: str

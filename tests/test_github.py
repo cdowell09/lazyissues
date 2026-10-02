@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from lazyissues.github import GitHubError, GraphQLGateway
-from lazyissues.models import Event, Issue, ProjectField
+from lazyissues.models import Event, Issue, Project, ProjectField
 
 
 def node(number: int) -> dict:
@@ -222,3 +222,70 @@ def offline(request: httpx.Request) -> httpx.Response:
 async def test_transport_failures_raise_github_error(handler, message):
     with pytest.raises(GitHubError, match=message):
         await gateway(handler).search_issues("x")
+
+
+def answer(data: dict, headers: dict | None = None):
+    """A handler that returns `data`, and the list of variables it was sent."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["variables"])
+        return httpx.Response(200, json={"data": data}, headers=headers)
+
+    return handler, sent
+
+
+@pytest.mark.parametrize(
+    ("headers", "scopes"),
+    [
+        ({"X-OAuth-Scopes": "repo, read:org, project"}, {"repo", "read:org", "project"}),
+        ({"X-OAuth-Scopes": ""}, set()),
+        ({}, set()),
+    ],
+)
+async def test_whoami_gives_the_login_and_the_token_scopes_from_the_response_header(
+    headers, scopes
+):
+    handler, _ = answer({"viewer": {"login": "me"}}, headers)
+    assert await gateway(handler).whoami() == ("me", scopes)
+
+
+async def test_repo_labels_follows_pages():
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        sent.append(variables)
+        last = variables["after"] == "c1"
+        labels = {
+            "pageInfo": {"hasNextPage": not last, "endCursor": None if last else "c1"},
+            "nodes": [{"name": "x" if last else "bug"}],
+        }
+        return httpx.Response(200, json={"data": {"repository": {"labels": labels}}})
+
+    assert await gateway(handler).repo_labels("o/r") == ["bug", "x"]
+    assert sent == [
+        {"owner": "o", "name": "r", "after": None},
+        {"owner": "o", "name": "r", "after": "c1"},
+    ]
+
+
+async def test_repo_projects_lists_open_projects_with_status_options_in_board_order():
+    def project(number: int, closed: bool = False, status: dict | None = None) -> dict:
+        return {
+            "number": number,
+            "title": f"Board {number}",
+            "closed": closed,
+            "owner": {"login": "o"},
+            "field": status,
+        }
+
+    options = {"options": [{"name": "Todo"}, {"name": "In Progress"}, {"name": "Done"}]}
+    nodes = [project(1, status=options), project(2, closed=True), project(3)]
+    handler, sent = answer({"repository": {"projectsV2": {"nodes": nodes}}})
+
+    assert await gateway(handler).repo_projects("o/r") == [
+        Project("o/1", "Board 1", ("Todo", "In Progress", "Done")),
+        Project("o/3", "Board 3"),
+    ]
+    assert sent == [{"owner": "o", "name": "r"}]
