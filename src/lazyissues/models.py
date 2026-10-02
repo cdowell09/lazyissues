@@ -1,6 +1,6 @@
 """Domain records shared by every layer. Names follow CONTEXT.md."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -11,6 +11,9 @@ class Issue:
     url: str
     assignees: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
+    closed: bool = False
+    # The issue's Status on each project it is on, keyed by project "owner/number".
+    project_statuses: dict[str, str] = field(default_factory=dict, hash=False)
 
     @property
     def key(self) -> str:

@@ -15,6 +15,8 @@ def node(number: int) -> dict:
         "repository": {"nameWithOwner": "o/r"},
         "assignees": {"nodes": [{"login": "me"}]},
         "labels": {"nodes": [{"name": "bug"}]},
+        "state": "OPEN",
+        "projectItems": {"nodes": []},
     }
 
 
@@ -49,6 +51,35 @@ async def test_search_follows_pages_and_builds_issues():
     ]
     assert [v["after"] for v in sent] == [None, "c1"]
     assert sent[0]["q"] == "is:open repo:o/r"
+
+
+async def test_search_reads_state_and_each_projects_status():
+    def item(owner: str, number: int, status: dict | None) -> dict:
+        return {
+            "project": {"owner": {"login": owner}, "number": number},
+            "fieldValueByName": status,
+        }
+
+    closed = node(3) | {
+        "state": "CLOSED",
+        "projectItems": {
+            "nodes": [
+                item("o", 1, {"name": "In Progress"}),
+                item("acme", 4, None),  # on the project, Status unset
+                item("acme", 5, {}),  # Status is not a single-select field
+            ]
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert 'fieldValueByName(name: "Status")' in json.loads(request.content)["query"]
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [closed]}
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    [issue] = await gateway(handler).search_issues("x")
+
+    assert issue.closed
+    assert issue.project_statuses == {"o/1": "In Progress"}
 
 
 async def test_graphql_errors_raise():

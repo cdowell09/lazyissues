@@ -25,6 +25,29 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Python 3.12+
 - The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope: `gh auth refresh -s project`
 
+## Statuses
+
+My Work groups your open issues by status. You list the statuses in `config.toml`, in the order you want the groups shown, and each repo says where its statuses live: status labels, or one GitHub Project's Status field.
+
+```toml
+[[repos]]
+name = "octo-dev/tidepool"          # labels such as `todo` or `in-progress`
+
+[[repos]]
+name = "octo-dev/lanternfish"
+status_source = "project"
+project = "octo-dev/3"              # the project's owner/number
+
+[[statuses]]
+name = "Todo"
+
+[[statuses]]
+name = "In Progress"
+active = true
+```
+
+Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-progress` label and a project's "In Progress" option share one group. Issues with no status come first under "No status", and statuses not in your list come after the ones that are. An issue with two status labels shows under the later one, marked ⚠.
+
 ## Install
 
 lazyissues is not on PyPI yet; these commands work once the first release ships.

@@ -1,7 +1,7 @@
 """An in-memory GitHub, used by the test suite and by `--demo`."""
 
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from lazyissues.models import Issue
 
@@ -13,7 +13,11 @@ class FakeGitHub:
     closed: set[str] = field(default_factory=set)  # issue keys
 
     async def search_issues(self, query: str) -> list[Issue]:
-        return [issue for issue in self.issues if self._matches(issue, query)]
+        return [
+            replace(issue, closed=issue.key in self.closed)
+            for issue in self.issues
+            if self._matches(issue, query)
+        ]
 
     def _matches(self, issue: Issue, query: str) -> bool:
         """Understands the subset of GitHub search syntax the app sends."""

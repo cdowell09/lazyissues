@@ -1,5 +1,6 @@
 """My Work: open issues assigned to the current user across the repo set."""
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import DataTable
@@ -8,6 +9,7 @@ from lazyissues import search
 from lazyissues.config import Config
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue
+from lazyissues.statuses import StatusRules
 
 QUERY = "is:issue is:open assignee:@me"
 
@@ -17,6 +19,7 @@ class MyWork(Widget):
         super().__init__(id="my-work")
         self.config = config
         self.github = github
+        self.rules = StatusRules(config)
 
     def compose(self) -> ComposeResult:
         yield DataTable(cursor_type="row")
@@ -36,13 +39,16 @@ class MyWork(Widget):
     def show(self, issues: list[Issue]) -> None:
         table = self.query_one(DataTable)
         table.clear()
-        for issue in issues:
-            table.add_row(
-                issue.ref,
-                issue.title,
-                ", ".join(issue.assignees),
-                ", ".join(issue.labels),
-                key=issue.key,
-            )
+        for group in self.rules.group(issues):
+            table.add_row(Text(f"{group.name} ({len(group.issues)})", style="bold"), "", "", "")
+            for issue in group.issues:
+                marker = " ⚠" if self.rules.status_of(issue).ambiguous else ""
+                table.add_row(
+                    issue.ref + marker,
+                    issue.title,
+                    ", ".join(issue.assignees),
+                    ", ".join(issue.labels),
+                    key=issue.key,
+                )
         if not issues:
             table.add_row("", "No open issues are assigned to you.", "", "")

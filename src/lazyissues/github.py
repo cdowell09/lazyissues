@@ -37,10 +37,18 @@ query($q: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
-        number title url
+        number title url state
         repository { nameWithOwner }
         assignees(first: 10) { nodes { login } }
         labels(first: 20) { nodes { name } }
+        projectItems(first: 10) {
+          nodes {
+            project { number owner { ... on Actor { login } } }
+            fieldValueByName(name: "Status") {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+            }
+          }
+        }
       }
     }
   }
@@ -56,7 +64,19 @@ def _issue(node: dict[str, Any]) -> Issue:
         url=node["url"],
         assignees=tuple(a["login"] for a in node["assignees"]["nodes"]),
         labels=tuple(label["name"] for label in node["labels"]["nodes"]),
+        closed=node["state"] == "CLOSED",
+        project_statuses=_project_statuses(node["projectItems"]["nodes"]),
     )
+
+
+def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
+    """Each project's Status option, keyed "owner/number"; unset ones are left out."""
+    statuses = {}
+    for item in items:
+        if status := (item["fieldValueByName"] or {}).get("name"):
+            project = item["project"]
+            statuses[f"{project['owner']['login']}/{project['number']}"] = status
+    return statuses
 
 
 class GraphQLGateway:
