@@ -6,15 +6,20 @@ from textual import events
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, OptionList, SelectionList, Tab, TabbedContent
+from textual.widgets import DataTable, Input, OptionList, SelectionList, Static, Tab, TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
+from lazyissues.config import SavedFilter
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.keys import KeysScreen
 from lazyissues.models import CloseReason
 from lazyissues.move_picker import MovePicker
 from lazyissues.move_planner import Close
+from lazyissues.preferences import PreferencesScreen
 from lazyissues.setup import SetupApp, SourcesScreen
+from lazyissues.status_list import StatusList
+from lazyissues.views.filters import Filters
 
 
 async def until(pilot: Pilot, condition: Callable[[], bool]) -> None:
@@ -47,9 +52,10 @@ async def click_row(pilot: Pilot, row: int, x: int = 2, view: str = "my-work") -
 
 
 async def click_option(pilot: Pilot, options: OptionList, index: int) -> None:
-    """Click the `index`th option of a list of one-line options."""
+    """Click the `index`th option of a list of one-line options, scrolled into view."""
+    options.scroll_to(y=index, animate=False, immediate=True)
     top = options.content_region.y - options.region.y
-    await pilot.click(options, offset=(2, top + index))
+    await pilot.click(options, offset=(2, top + index - round(options.scroll_y)))
     await pilot.pause()
 
 
@@ -88,6 +94,11 @@ async def open_detail(pilot: Pilot) -> IssueDetailScreen:
     return pilot.app.screen
 
 
+async def click_tab(pilot: Pilot, label: str) -> None:
+    await pilot.click(next(tab for tab in pilot.app.query(Tab) if str(tab.label) == label))
+    await pilot.pause()
+
+
 def copy_key(app: App) -> Widget | None:
     """The footer's Copy, if it shows one."""
     keys = app.screen.query("Footer FooterKey")
@@ -123,7 +134,7 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
         await settled(pilot)
-        await pilot.click(next(tab for tab in app.query(Tab) if str(tab.label) == "Team"))
+        await click_tab(pilot, "Team")
         assert first_cell(app, 3, "team") == "▾ lanternfish#9"
         assert first_cell(app, 4, "team") == "└ lanternfish#11"
 
@@ -139,8 +150,7 @@ async def test_clicking_a_tab_shows_it_and_its_rows_are_clickable():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
         await settled(pilot)
-        team = next(tab for tab in app.query(Tab) if str(tab.label) == "Team")
-        await pilot.click(team)
+        await click_tab(pilot, "Team")
         assert app.query_one(TabbedContent).active_pane is app.query_one("#team").parent
 
         await click_row(pilot, 1, view="team")
@@ -256,6 +266,76 @@ async def test_dragging_across_a_form_field_and_ctrl_c_copies_it():
         await drag(pilot, field, (left, top), (left + len("lantern"), top))
         await pilot.press("ctrl+c")
         assert copied == ["lantern"]
+
+
+async def test_clicking_a_saved_filter_chooses_it_and_clicking_it_again_runs_it():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await click_tab(pilot, "Filters")
+        filters = app.query_one(Filters)
+        sidebar = filters.query_one("#sidebar", OptionList)
+        assert filters.running == filters.filters[0]
+
+        await click_option(pilot, sidebar, 2)
+        assert filters.running == filters.filters[0]
+        await click_option(pilot, sidebar, 2)
+        assert filters.running == filters.filters[2]
+
+
+async def test_filter_form_and_delete_buttons_are_clickable():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await click_tab(pilot, "Filters")
+        filters = app.query_one(Filters)
+        filters.query_one("#sidebar").focus()
+        await pilot.press("n", *"Mine")
+        await pilot.click("#query")
+        await pilot.press(*"assignee:@me")
+        await pilot.click("#save")
+        await settled(pilot)
+        assert filters.filters[-1] == SavedFilter("Mine", "assignee:@me")
+
+        await pilot.press("x")
+        await pilot.click("#delete")
+        await settled(pilot)
+        assert [f.name for f in filters.filters] == [f.name for f in demo.config().filters]
+
+
+async def test_preferences_options_checkboxes_and_buttons_are_clickable():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(100, 80)) as pilot:
+        await settled(pilot)
+        await pilot.press("S")
+        await until(pilot, lambda: isinstance(app.screen, PreferencesScreen))
+        preferences = app.screen
+        theme = sorted(app.available_themes)[0]
+        await click_option(pilot, preferences.query_one("#theme", OptionList), 0)
+        assert app.theme == theme  # previewed
+        await click_option(pilot, preferences.query_one(StatusList), 0)  # Todo, now active
+        await pilot.click("#show-done")
+        await pilot.click("Button.-primary")  # Save
+        await settled(pilot)
+
+    preferences = app.config.preferences
+    assert (preferences.theme, preferences.show_done) == (theme, True)
+    assert app.config.statuses[0].active
+
+
+async def test_question_mark_lists_the_mouse_and_copy_and_scrolls_with_the_wheel():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(100, 20)) as pilot:
+        await settled(pilot)
+        await pilot.press("question_mark")
+        await until(pilot, lambda: isinstance(app.screen, KeysScreen))
+        text = "\n".join(str(widget.render()) for widget in app.screen.query(Static))
+        lines = {" ".join(line.split()) for line in text.splitlines()}
+        assert {"Mouse", "^c Copy", "wheel Scroll"} <= lines
+
+        keys = app.screen.query_one("#keys")
+        await wheel(pilot, keys)
+        assert keys.scroll_y > 0
 
 
 async def test_setup_checkboxes_and_buttons_are_clickable(tmp_path):

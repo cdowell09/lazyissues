@@ -69,7 +69,7 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | Key | Where | Action |
 | --- | --- | --- |
 | `↑` `↓` | lists | select an issue |
-| `Enter` | lists | open the issue detail |
+| `Enter` | lists | open the issue detail; on a group header, fold or unfold it |
 | `/` | lists | search by number, title, assignee or label (and team member in Team); `Enter` keeps it, `Esc` clears it |
 | `f` `F` | lists | focus the next or previous status, then back to all |
 | `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
@@ -88,11 +88,18 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
 | `S` | anywhere | preferences |
 | `?` | anywhere | list every key |
+| `Ctrl+C` | anywhere | copy the selected text |
 | `q` | anywhere | quit |
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
 Each tab remembers its selection, search, status focus, done toggle, folds and repo filter while the app runs.
+
+## Mouse
+
+Click a tab or row to select it, and click the selected row again to open it. Click a group header, or a parent's `▸`/`▾`, to fold or unfold it. Menus work the same way: in the move picker and the Filters sidebar, click an option to choose it and click it again to take it. Checkboxes, fields and buttons in forms, preferences and setup are clickable. Click **[×]** at the top of the issue detail to close it. The wheel scrolls lists, the detail, help and editors.
+
+Drag across text in a list, the detail or a form field to select it. Press `Ctrl+C`, or click **Copy** in the footer while text is selected, to copy it. lazyissues copies through your terminal (OSC 52) and also through the system clipboard, so copying works in terminals that ignore OSC 52, such as macOS Terminal: `pbcopy` on macOS, `wl-copy` or `xclip` on Linux (install one), and `clip.exe` on Windows.
 
 ## Moves
 

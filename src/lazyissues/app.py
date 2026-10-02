@@ -37,6 +37,15 @@ from lazyissues.views.my_work import MyWork
 from lazyissues.views.team import Team
 from lazyissues.views.unassigned import Unassigned
 
+# What the mouse does, for the `?` help: its gestures aren't bindings, so they are listed here.
+MOUSE = [
+    Binding("click", "", "Select a tab, row or option; on a group header or ▸/▾, fold"),
+    Binding("2nd click", "", "Open the selected row, or take the chosen option"),
+    Binding("wheel", "", "Scroll", key_display="wheel"),
+    Binding("drag", "", "Select text, then ctrl+c or Copy copies it"),
+    Binding("[×]", "", "Close the issue detail"),
+]
+
 
 class LazyIssuesApp(App[None]):
     TITLE = "lazyissues"
@@ -171,6 +180,7 @@ class LazyIssuesApp(App[None]):
             KeysScreen(
                 [
                     ("Anywhere", self.BINDINGS),
+                    ("Mouse", MOUSE),
                     ("Lists", IssueList.BINDINGS),
                     ("Moving in lists", DataTable.BINDINGS),
                     ("Issue detail", IssueDetailScreen.BINDINGS),
