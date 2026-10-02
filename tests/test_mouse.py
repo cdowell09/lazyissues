@@ -262,9 +262,11 @@ async def test_the_footer_offers_copy_while_text_is_selected():
         title = detail.query_one("#detail .title")
         ref = detail.issue.ref
         await drag(pilot, title, (0, 0), (len(ref) - 1, 0))
+        await until(pilot, lambda: copy_key(app) is not None)  # the footer redraws on a refresh
         key = copy_key(app)
         assert key is not None
         await quick_click(pilot, key)
+        await until(pilot, lambda: bool(copied))  # Copy presses ctrl+c, a message later
         assert copied == [ref]
 
 
@@ -379,8 +381,7 @@ async def test_forms_take_clicks_and_copy_selected_text():
 
         label = form.query_one("Label")
         await drag(pilot, label, (0, 0), (8, 0))  # "Assignees"
-        await pilot.pause()
-        assert copy_key(app) is not None
+        await until(pilot, lambda: copy_key(app) is not None)  # the footer redraws on a refresh
         await pilot.press("ctrl+c")
         assert copied == ["Assignees"]
 
