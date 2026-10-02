@@ -14,6 +14,7 @@ class Issue:
     assignees: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
     closed: bool = False
+    closed_at: str | None = None  # ISO 8601, as GitHub sends it; None while open
     # The issue's Status on each project it is on, keyed by project "owner/number".
     project_statuses: dict[str, str] = field(default_factory=dict, hash=False)
 

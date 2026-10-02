@@ -25,6 +25,12 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Python 3.12+
 - The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope: `gh auth refresh -s project`
 
+## Tabs
+
+- **My Work**: your open issues, by status
+- **Team**: open issues by assignee, for everyone in `team` plus you, the busiest (most issues in an active status) first; within a person, active issues come first and done ones last
+- **Unassigned**: open issues with no assignee, by status
+
 ## Statuses
 
 My Work groups your open issues by status. You list the statuses in `config.toml`, in the order you want the groups shown, and each repo says where its statuses live: status labels, or one GitHub Project's Status field.
@@ -46,7 +52,7 @@ name = "In Progress"
 active = true
 ```
 
-Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-progress` label and a project's "In Progress" option share one group. Issues with no status come first under "No status", and statuses not in your list come after the ones that are. An issue with two status labels shows under the later one, marked ⚠.
+Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-progress` label and a project's "In Progress" option share one group. Issues with no status come first under "No status", and statuses not in your list come after the ones that are. An issue with two status labels shows under the later one, marked ⚠. Closed issues, shown with `d`, form a Done group at the end.
 
 ## Keys
 
@@ -54,19 +60,26 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | --- | --- | --- |
 | `↑` `↓` | lists | select an issue |
 | `Enter` | lists | open the issue detail |
+| `/` | lists | search by number, title, assignee or label (and team member in Team); `Enter` keeps it, `Esc` clears it |
+| `f` `F` | lists | focus the next or previous status, then back to all |
+| `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
+| `z` `Z` | lists | fold the group under the cursor, or fold and unfold every group |
+| `R` | lists | show one repo at a time, then all |
 | `←` `→` | detail | previous or next issue in the list underneath |
 | `z` | detail | toggle full screen |
 | `o` | detail | open the issue in your browser |
 | `h` | detail | toggle the activity timeline |
 | `Esc` | detail | close |
-| `r` | lists | refresh from GitHub |
+| `r` | lists | refresh the tab from GitHub |
 | `q` | anywhere | quit |
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
+Each tab remembers its selection, search, status focus, done toggle, folds and repo filter while the app runs.
+
 ## Cache
 
-The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per repo set. lazyissues shows it at startup while it refreshes. Deleting it is always safe.
+The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. Deleting it is always safe.
 
 ## Install
 
@@ -99,6 +112,7 @@ Setup also puts you on the team roster and adds two saved filters, "Ready for me
 
 ```toml
 team = ["octo-dev", "sam-reef"]     # GitHub logins in the Team tab
+done_window_days = 14               # how far back `d` reaches for closed issues; the default
 
 [[repos]]                           # at least one
 name = "octo-dev/tidepool"

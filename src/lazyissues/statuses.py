@@ -7,6 +7,7 @@ from lazyissues.config import Config, Repo
 from lazyissues.models import Issue
 
 NO_STATUS = "No status"
+DONE = "Done"  # every closed issue's status, whatever its source says
 
 
 def normalize(name: str) -> str:
@@ -37,12 +38,18 @@ class StatusGroup:
 class StatusRules:
     def __init__(self, config: Config) -> None:
         self._statuses = {normalize(status.name): status for status in config.statuses}
-        self._rank = {normalize(NO_STATUS): -1} | {
-            key: rank for rank, key in enumerate(self._statuses)
-        }
+        # Unknown statuses share one rank after the configured ones, and Done comes last.
+        self._unknown = len(self._statuses)
+        self._rank = (
+            {normalize(NO_STATUS): -1}
+            | {key: rank for rank, key in enumerate(self._statuses)}
+            | {normalize(DONE): self._unknown + 1}
+        )
         self._repos = {repo.name.casefold(): repo for repo in config.repos}
 
     def status_of(self, issue: Issue) -> IssueStatus:
+        if self.is_done(issue):
+            return IssueStatus(DONE)
         # A repo outside the repo set (a saved filter's own `repo:`) reads status labels.
         repo = self._repos.get(issue.repo.casefold(), Repo(issue.repo))
         if repo.project is not None:
@@ -63,14 +70,14 @@ class StatusRules:
 
     def group(self, issues: list[Issue]) -> list[StatusGroup]:
         """Issues by status in display order: "No status", the configured
-        statuses in order, then unknown statuses in the order first seen."""
+        statuses in order, unknown statuses in the order first seen, then Done."""
         groups: dict[str, StatusGroup] = {}
         for issue in issues:
             name = self.status_of(issue).name
             groups.setdefault(normalize(name), StatusGroup(name, [])).issues.append(issue)
-        # Unknown names share the last rank; sorted() is stable, so they stay first-seen.
+        # sorted() is stable, so unknown statuses, which share a rank, stay first-seen.
         return sorted(
-            groups.values(), key=lambda g: self._rank.get(normalize(g.name), len(self._rank))
+            groups.values(), key=lambda g: self._rank.get(normalize(g.name), self._unknown)
         )
 
     def _project_status(self, issue: Issue, project: str) -> IssueStatus:

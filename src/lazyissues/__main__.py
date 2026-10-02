@@ -9,7 +9,7 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.config import ConfigError
 from lazyissues.github import GitHubError, GraphQLGateway, gh_token
 from lazyissues.setup import SetupApp
-from lazyissues.store import IssueStore, cache_dir, snapshot_path
+from lazyissues.store import cache_dir
 
 
 def main() -> None:
@@ -33,8 +33,7 @@ def main() -> None:
         config = SetupApp(GraphQLGateway(token), path).run()
         if config is None:
             sys.exit("lazyissues: setup quit before saving. Run lazyissues again to finish it.")
-    store = IssueStore(snapshot_path(cache_dir(), config.repo_names))
-    LazyIssuesApp(config, GraphQLGateway(token), store).run()
+    LazyIssuesApp(config, GraphQLGateway(token), cache_dir()).run()
 
 
 if __name__ == "__main__":

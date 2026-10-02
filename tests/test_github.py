@@ -17,6 +17,7 @@ def node(number: int) -> dict:
         "assignees": {"nodes": [{"login": "me"}]},
         "labels": {"nodes": [{"name": "bug"}]},
         "state": "OPEN",
+        "closedAt": None,
         "projectItems": {"nodes": []},
     }
 
@@ -63,6 +64,7 @@ async def test_search_reads_state_and_each_projects_status():
 
     closed = node(3) | {
         "state": "CLOSED",
+        "closedAt": "2026-09-30T12:00:00Z",
         "projectItems": {
             "nodes": [
                 item("o", 1, {"name": "In Progress"}),
@@ -80,6 +82,7 @@ async def test_search_reads_state_and_each_projects_status():
     [issue] = await gateway(handler).search_issues("x")
 
     assert issue.closed
+    assert issue.closed_at == "2026-09-30T12:00:00Z"
     assert issue.project_statuses == {"o/1": "In Progress"}
 
 

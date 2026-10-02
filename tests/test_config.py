@@ -39,6 +39,14 @@ key = "p"
     )
 
 
+def test_loads_the_done_window_which_is_two_weeks_by_default(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[[repos]]\nname = "a/x"\n')
+    assert load(path).done_window_days == 14
+    path.write_text('done_window_days = 7\n[[repos]]\nname = "a/x"\n')
+    assert load(path).done_window_days == 7
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [
@@ -48,6 +56,7 @@ key = "p"
         ('[[repos]]\nname = "nope"\n', "owner/repo"),
         ('[[repos]]\nname = "a/x"\nstatus_source = "project"\n', "owner/number"),
         ('[[repos]]\nname = "a/x"\n[[statuses]]\nactive = true\n', "needs a `name`"),
+        ('done_window_days = 0\n[[repos]]\nname = "a/x"\n', "whole number of days"),
     ],
 )
 def test_reports_bad_config(tmp_path, text, message):
