@@ -8,6 +8,7 @@ from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import ConfigError
 from lazyissues.github import GitHubError, GraphQLGateway, gh_token
+from lazyissues.store import IssueStore, cache_dir, snapshot_path
 
 
 def main() -> None:
@@ -21,7 +22,8 @@ def main() -> None:
         # Fail before the TUI takes over the terminal, so errors print normally.
         try:
             config = config_module.load(config_module.config_dir() / "config.toml")
-            app = LazyIssuesApp(config, GraphQLGateway(gh_token()))
+            store = IssueStore(snapshot_path(cache_dir(), config.repo_names))
+            app = LazyIssuesApp(config, GraphQLGateway(gh_token()), store)
         except (ConfigError, GitHubError) as e:
             sys.exit(f"lazyissues: {e}")
     app.run()
