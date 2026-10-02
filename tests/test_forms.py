@@ -370,6 +370,17 @@ def select(app: LazyIssuesApp, id: str) -> Select:
     return app.screen.query_one(f"#{id}", Select)
 
 
+async def choose_project_repo(pilot) -> None:
+    """Pick o/p in the create form and wait until its choices have loaded: the repo's
+    `Changed` may only start the load after the app looks settled (slow Windows CI)."""
+    select(pilot.app, "repo").value = "o/p"
+    for _ in range(100):
+        await settle(pilot)
+        if options(pilot.app, "milestone") == ["Beta"]:  # o/p's only milestone
+            return
+    raise AssertionError("o/p's choices never loaded")
+
+
 def options(app: LazyIssuesApp, id: str) -> list[str]:
     return [str(prompt) for prompt, _ in select(app, id)._options if _ is not Select.NULL]
 
@@ -411,8 +422,7 @@ async def test_create_in_a_project_backed_repo_sets_its_status_on_the_project():
         await pilot.press("c")
         await settle(pilot)
 
-        select(app, "repo").value = "o/p"
-        await settle(pilot)
+        await choose_project_repo(pilot)
         assert options(app, "status") == ["Todo", "Doing"]  # Done is reached by closing
         assert options(app, "milestone") == ["Beta"]
         app.screen.query_one("#title", Input).value = "On the board"
@@ -443,8 +453,7 @@ async def test_create_without_access_to_the_project_offers_no_status_but_still_c
         await settle(pilot)
         await pilot.press("c")
         await settle(pilot)
-        select(app, "repo").value = "o/p"
-        await settle(pilot)
+        await choose_project_repo(pilot)
         assert options(app, "status") == []
 
         app.screen.query_one("#title", Input).value = "Off the board"
@@ -468,8 +477,7 @@ async def test_a_created_issue_whose_status_fails_is_still_created_and_the_form_
         await settle(pilot)
         await pilot.press("c")
         await settle(pilot)
-        select(app, "repo").value = "o/p"
-        await settle(pilot)
+        await choose_project_repo(pilot)
         app.screen.query_one("#title", Input).value = "On the board"
         select(app, "status").value = "Doing"
 
