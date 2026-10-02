@@ -20,17 +20,6 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 - Keyboard or mouse, including drag-to-select and copy
 - macOS, Linux and Windows
 
-## Keys
-
-| Key | Action |
-| --- | --- |
-| `r` | Refresh from GitHub |
-| `q` | Quit |
-
-## Cache
-
-The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per repo set. lazyissues shows it at startup while it refreshes. Deleting it is always safe.
-
 ## Requirements
 
 - Python 3.12+
@@ -58,6 +47,17 @@ active = true
 ```
 
 Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-progress` label and a project's "In Progress" option share one group. Issues with no status come first under "No status", and statuses not in your list come after the ones that are. An issue with two status labels shows under the later one, marked ⚠.
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| `r` | Refresh from GitHub |
+| `q` | Quit |
+
+## Cache
+
+The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per repo set. lazyissues shows it at startup while it refreshes. Deleting it is always safe.
 
 ## Install
 
