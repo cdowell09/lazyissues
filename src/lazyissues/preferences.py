@@ -85,7 +85,10 @@ class PreferencesScreen(ModalScreen[Config | None]):
 
     def on_mount(self) -> None:
         themes = self.query_one("#theme", OptionList)
-        themes.highlighted = themes.get_option_index(self.config.preferences.theme)
+        # Quietly: the theme already shows, and a late preview of it could undo the
+        # user's first move through the list.
+        with themes.prevent(OptionList.OptionHighlighted):
+            themes.highlighted = themes.get_option_index(self.config.preferences.theme)
         self._show_key()
 
     @on(OptionList.OptionHighlighted, "#theme")
