@@ -27,7 +27,7 @@ class MyWork(Widget):
 
     async def load(self) -> None:
         try:
-            issues = await self.github.search_issues(search.scoped(QUERY, self.config.repos))
+            issues = await self.github.search_issues(search.scoped(QUERY, self.config.repo_names))
         except GitHubError as e:
             self.notify(str(e), title="Couldn't load My Work", severity="error", timeout=10)
             return

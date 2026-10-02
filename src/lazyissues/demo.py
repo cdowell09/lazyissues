@@ -1,6 +1,6 @@
 """Made-up data for `--demo`. Never real accounts or repositories."""
 
-from lazyissues.config import Config
+from lazyissues.config import Config, Repo, Status
 from lazyissues.fake import FakeGitHub
 from lazyissues.models import Issue
 
@@ -20,7 +20,10 @@ def _issue(repo: str, number: int, title: str, *assignees: str, labels: tuple[st
 
 
 def config() -> Config:
-    return Config(repos=REPOS)
+    return Config(
+        repos=[Repo(name) for name in REPOS],
+        statuses=[Status("Todo"), Status("In Progress", active=True, key="p")],
+    )
 
 
 def github() -> FakeGitHub:

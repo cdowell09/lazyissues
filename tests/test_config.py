@@ -1,12 +1,33 @@
 import pytest
 
-from lazyissues.config import Config, ConfigError, config_dir, load
+from lazyissues.config import Config, ConfigError, Repo, Status, config_dir, load
 
 
-def test_loads_repo_set(tmp_path):
+def test_loads_repos_and_statuses(tmp_path):
     path = tmp_path / "config.toml"
-    path.write_text('# mine\n[[repos]]\nname = "a/x"\n\n[[repos]]\nname = "a/y"\n')
-    assert load(path) == Config(repos=["a/x", "a/y"])
+    path.write_text(
+        """# mine
+[[repos]]
+name = "a/x"
+
+[[repos]]
+name = "a/y"
+status_source = "project"
+project = "a/1"
+
+[[statuses]]
+name = "Todo"
+
+[[statuses]]
+name = "In Progress"
+active = true
+key = "p"
+"""
+    )
+    assert load(path) == Config(
+        repos=[Repo("a/x"), Repo("a/y", "project", "a/1")],
+        statuses=[Status("Todo"), Status("In Progress", active=True, key="p")],
+    )
 
 
 @pytest.mark.parametrize(
@@ -16,6 +37,8 @@ def test_loads_repo_set(tmp_path):
         ("repos = [", "not valid TOML"),
         ("", "at least one"),
         ('[[repos]]\nname = "nope"\n', "owner/repo"),
+        ('[[repos]]\nname = "a/x"\nstatus_source = "project"\n', "owner/number"),
+        ('[[repos]]\nname = "a/x"\n[[statuses]]\nactive = true\n', "needs a `name`"),
     ],
 )
 def test_reports_bad_config(tmp_path, text, message):
