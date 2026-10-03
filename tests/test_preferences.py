@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+from listed import plain
 from textual import events
 from textual.pilot import Pilot
 from textual.widgets import (
@@ -28,7 +29,7 @@ from lazyissues.status_list import StatusList
 
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table)
 
 
 def active_tab(app: LazyIssuesApp) -> str:
@@ -50,7 +51,7 @@ async def test_the_app_starts_with_the_saved_theme_tab_and_done_visibility():
         assert app.theme == "nord"
         assert active_tab(app) == "Unassigned"
         assert app.focused is app.query_one("#unassigned DataTable")
-        assert firsts(app, "my-work")[-2:] == ["▾ Done (1)", "    tidepool#10"]
+        assert firsts(app, "my-work")[-2:] == ["Done (1)", "tidepool#10"]
 
 
 async def test_an_unknown_start_tab_starts_on_the_first_tab():
@@ -152,19 +153,19 @@ async def test_saving_preferences_writes_config_and_applies_them_at_once(tmp_pat
         assert app.theme == "nord"
         groups = [row for row in firsts(app, "my-work") if "(" in row]
         assert groups == [
-            "▾ No status (1)",
-            "▾ In Review (1)",
-            "▾ In Progress (2)",
-            "▾ Blocked (1)",
-            "▾ Done (1)",
+            "No status (1)",
+            "In Review (1)",
+            "In Progress (2)",
+            "Blocked (1)",
+            "Done (1)",
         ]
         assert [row for row in firsts(app, "team") if "(" in row] == [
-            "▾ octo-dev (6)",
-            "▾ sam-reef (2)",
-            "▾ new-dev (0)",
+            "octo-dev (6)",
+            "sam-reef (2)",
+            "new-dev (0)",
         ]
         milestones = [row for row in firsts(app, "milestones") if "(" in row]
-        assert [row.split("  ")[0] for row in milestones] == ["▾ tidepool / v0.4 (3)"]  # done shown
+        assert [row.split("  ")[0] for row in milestones] == ["tidepool / v0.4 (3)"]  # done shown
         # The new key is a move shortcut at once.
         app.query_one("#my-work DataTable", DataTable).focus()
         await pilot.press("down", "v")

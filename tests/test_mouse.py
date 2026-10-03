@@ -20,7 +20,7 @@ from lazyissues.preferences import PreferencesScreen
 from lazyissues.setup import SetupApp, SourcesScreen
 from lazyissues.status_list import StatusList
 from lazyissues.views.filters import Filters
-from lazyissues.views.issue_list import FOLDED, UNFOLDED
+from lazyissues.views.issue_list import FOLDED, INDENT, UNFOLDED
 
 
 async def until(pilot: Pilot, condition: Callable[[], bool]) -> None:
@@ -163,7 +163,7 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
         assert first_cell(app, 3, "team") == "  ▾ lanternfish#9"
         assert first_cell(app, 4, "team") == "    └ lanternfish#11"
 
-        arrow = ISSUE_TEXT + 2  # under its group's name
+        arrow = ISSUE_TEXT + len(INDENT)  # under its group's name
         await click_row(pilot, 3, x=arrow, view="team")
         assert first_cell(app, 3, "team") == "  ▸ lanternfish#9"
         assert first_cell(app, 4, "team") == "    tidepool#15 ⚠"
@@ -255,9 +255,11 @@ async def test_dragging_across_a_list_row_selects_its_text_without_opening_it():
     async with app.run_test() as pilot:
         await settled(pilot)
         await click_row(pilot, 1)
-        ref = first_cell(app, 1)
+        cell = first_cell(app, 1)
+        ref = cell.lstrip()
+        start = ISSUE_TEXT + len(cell) - len(ref)  # past the row's indentation
         # Row 1 is under the headers.
-        await drag(pilot, table(app), (ISSUE_TEXT, 2), (ISSUE_TEXT + len(ref) - 1, 2))
+        await drag(pilot, table(app), (start, 2), (start + len(ref) - 1, 2))
         assert not isinstance(app.screen, IssueDetailScreen)
         await pilot.press("ctrl+c")
         assert copied == [ref]

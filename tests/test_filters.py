@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+from listed import plain
 from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, TabbedContent
 
@@ -46,7 +47,7 @@ def results(app: LazyIssuesApp) -> FilterResults:
 def firsts(app: LazyIssuesApp) -> list[str]:
     """The first cell of every row of the shown results: group headers and issue refs."""
     table = results(app).query_one(DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table)
 
 
 async def settled(pilot: Pilot) -> None:
@@ -75,10 +76,10 @@ async def test_the_first_saved_filter_runs_and_its_issues_are_grouped_by_status(
     async with app.run_test() as pilot:
         await open_filters(pilot)
         assert firsts(app) == [
-            "▾ No status (1)",
-            "    lanternfish#9",
-            "▾ Todo (1)",
-            "    lanternfish#9 → lanternfish#7",  # a sub-issue, its parent in another group
+            "No status (1)",
+            "lanternfish#9",
+            "Todo (1)",
+            "lanternfish#9 → lanternfish#7",  # a sub-issue, its parent in another group
         ]
         sidebar = app.query_one("#filters OptionList", OptionList)
         assert [str(sidebar.get_option_at_index(i).prompt) for i in range(3)] == [
@@ -94,7 +95,7 @@ async def test_enter_runs_the_selected_filter_and_tab_moves_between_sidebar_and_
         await open_filters(pilot)
         await pilot.press("down", "enter")
         await settled(pilot)
-        assert firsts(app) == ["▾ Todo (1)", "    lanternfish#13"]
+        assert firsts(app) == ["Todo (1)", "lanternfish#13"]
 
         await pilot.press("tab")
         assert app.focused is results(app).query_one(DataTable)
@@ -118,13 +119,13 @@ async def test_a_query_with_its_own_repo_and_state_runs_as_written():
     app = LazyIssuesApp(config, github)
     async with app.run_test() as pilot:
         await open_filters(pilot)
-        assert firsts(app) == ["▾ Todo (1)", "    lanternfish#13"]
+        assert firsts(app) == ["Todo (1)", "lanternfish#13"]
 
         await pilot.press("down", "enter")
         await settled(pilot)
         # Shown without `d`, and closed 2 and 40 days ago: the query's own `is:closed`
         # replaces the done window.
-        assert firsts(app) == ["▾ Done (2)", "    tidepool#10", "    lanternfish#2"]
+        assert firsts(app) == ["Done (2)", "tidepool#10", "lanternfish#2"]
 
         await pilot.press("tab", "d")  # `d` still hides them
         assert firsts(app) == [""]
@@ -172,7 +173,7 @@ async def test_n_saves_a_new_filter_to_config_and_runs_it(tmp_path):
         await pilot.press("n", *"Mine", "tab", *"label:bug assignee:@me", "enter")
         await settled(pilot)
         assert names(app)[-1] == "Mine"
-        assert firsts(app) == ["▾ In Progress (1)", "    tidepool#12"]
+        assert firsts(app) == ["In Progress (1)", "tidepool#12"]
     saved = config_module.load(path).filters
     assert saved[-1] == SavedFilter("Mine", "label:bug assignee:@me")
 
@@ -199,7 +200,7 @@ async def test_e_edits_and_x_deletes_the_highlighted_filter_after_confirming(tmp
         await open_filters(pilot)
         await pilot.press("down", "e", "tab", "end", *" no:assignee", "enter")
         await settled(pilot)
-        assert firsts(app) == ["▾ Todo (1)", "    lanternfish#13"]
+        assert firsts(app) == ["Todo (1)", "lanternfish#13"]
 
         await pilot.press("up", "x", "n")  # keeps it
         assert len(names(app)) == 3
@@ -231,14 +232,14 @@ async def test_each_filter_opens_from_its_own_snapshot_on_the_next_launch(tmp_pa
     async with app.run_test() as pilot:
         await show_filters(pilot)
         assert firsts(app) == [
-            "▾ No status (1)",
-            "    lanternfish#9",
-            "▾ Todo (1)",
-            "    lanternfish#9 → lanternfish#7",  # a sub-issue, its parent in another group
+            "No status (1)",
+            "lanternfish#9",
+            "Todo (1)",
+            "lanternfish#9 → lanternfish#7",  # a sub-issue, its parent in another group
         ]
         await pilot.press("down", "enter")
         await pilot.pause()
-        assert firsts(app) == ["▾ Todo (1)", "    lanternfish#13"]
+        assert firsts(app) == ["Todo (1)", "lanternfish#13"]
 
 
 async def test_the_writing_keys_act_on_the_issue_in_the_results_and_e_edits_it():

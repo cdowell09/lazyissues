@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 
+from listed import plain
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, Static, TabbedContent
@@ -64,22 +65,25 @@ async def cursor_to(pilot: Pilot, key: str) -> None:
     await pilot.pause()
 
 
-async def test_a_checked_issue_and_each_group_header_stand_out_across_the_row():
+async def test_checked_issues_and_group_headers_are_tinted_to_the_end_of_the_row():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await cursor_to(pilot, TIDE_12)
-        await pilot.press("space")
-        await cursor_to(pilot, TIDE_15)  # the cursor's own color elsewhere
+        for key in (TIDE_12, TIDE_15):
+            await cursor_to(pilot, key)
+            await pilot.press("space")
+        await cursor_to(pilot, LANTERN_11)  # the cursor has its own color
 
         def background(row: int) -> object:
-            """The background in the Title column of `row`, past the checkbox."""
+            """The background at the right edge of `row`, past its last column."""
             at = table(app).region
-            return app.screen.get_style_at(at.x + 40, at.y + 1 + row).bgcolor
+            return app.screen.get_style_at(at.right - 1, at.y + 1 + row).bgcolor  # 1: headers
 
-        checked_row = table(app).get_row_index(TIDE_12)
-        plain_row = table(app).get_row_index(LANTERN_4)
-        header_row = checked_row - 1
-        assert len({background(checked_row), background(plain_row), background(header_row)}) == 3
+        rows = table(app).ordered_rows
+        headers = {background(i) for i, row in enumerate(rows) if row.key.value is None}
+        checked = {background(table(app).get_row_index(key)) for key in (TIDE_12, TIDE_15)}
+        plain = background(table(app).get_row_index(LANTERN_4))
+        assert len(headers) == len(checked) == 1  # alike within each kind
+        assert len(headers | checked | {plain}) == 3  # and unlike each other
 
 
 async def test_space_checks_an_issue_or_a_whole_group_and_u_clears_them():
@@ -153,10 +157,9 @@ def groups(app: App, view: str = "my-work") -> dict[str, list[str]]:
     """Each group's issue keys, by the group's name."""
     shown: dict[str, list[str]] = {}
     group: list[str] = []
-    for row in table(app, view).ordered_rows:
+    for row, text in zip(table(app, view).ordered_rows, plain(table(app, view)), strict=True):
         if row.key.value is None:
-            header = str(table(app, view).get_row(row.key)[1])
-            group = shown.setdefault(header[2:].rsplit(" (", 1)[0], [])  # after its arrow
+            group = shown.setdefault(text.rsplit(" (", 1)[0], [])
         else:
             group.append(row.key.value)
     return shown

@@ -1,5 +1,6 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
+from listed import drawn, plain
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
 
@@ -8,10 +9,13 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
 
 
+def table(app: LazyIssuesApp, view: str) -> DataTable:
+    return app.query_one(f"#{view} DataTable", DataTable)
+
+
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     """The first cell of every row: group headers and issue refs."""
-    table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table(app, view))
 
 
 async def open_tab(pilot: Pilot, view: str) -> None:
@@ -35,7 +39,8 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
         await settled(pilot)
-        assert firsts(app, "team") == [
+        # Issues indent under their group; a fold arrow has a column of its own.
+        assert drawn(table(app, "team")) == [
             "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
             "    lanternfish#4",
             "    tidepool#12",
@@ -54,10 +59,10 @@ async def test_unassigned_lists_open_issues_without_an_assignee_by_status():
     async with app.run_test() as pilot:
         await settled(pilot)
         assert firsts(app, "unassigned") == [
-            "▾ No status (1)",
-            "    tidepool#18",
-            "▾ Todo (1)",
-            "    lanternfish#13",
+            "No status (1)",
+            "tidepool#18",
+            "Todo (1)",
+            "lanternfish#13",
         ]
 
 
@@ -69,10 +74,10 @@ async def test_d_shows_issues_closed_within_the_done_window():
         await pilot.press("d")
         await settled(pilot)
         # tidepool#10 closed two days ago; lanternfish#2 forty days ago, outside the window.
-        assert firsts(app, "my-work")[-2:] == ["▾ Done (1)", "    tidepool#10"]
+        assert firsts(app, "my-work")[-2:] == ["Done (1)", "tidepool#10"]
 
         await pilot.press("d")
-        assert "▾ Done (1)" not in firsts(app, "my-work")
+        assert "Done (1)" not in firsts(app, "my-work")
 
 
 async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
@@ -81,41 +86,37 @@ async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
         await settled(pilot)
         await open_tab(pilot, "my-work")
         await pilot.press("slash", *"glow", "enter")
-        assert firsts(app, "my-work") == ["▾ In Progress (1)", "    lanternfish#4"]
+        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
 
         await open_tab(pilot, "team")
         await pilot.press("slash", *"mo-k", "enter")
-        assert firsts(app, "team") == ["▾ mo-kelp (0)"]
+        assert firsts(app, "team") == ["mo-kelp (0)"]
 
         await open_tab(pilot, "my-work")
-        assert firsts(app, "my-work") == ["▾ In Progress (1)", "    lanternfish#4"]
+        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
         await pilot.press("escape")  # clears the search
         assert len(firsts(app, "my-work")) == 9
 
         await pilot.press("f", "f")  # No status, then In Progress
-        assert firsts(app, "my-work") == [
-            "▾ In Progress (2)",
-            "    tidepool#12",
-            "    lanternfish#4",
-        ]
+        assert firsts(app, "my-work") == ["In Progress (2)", "tidepool#12", "lanternfish#4"]
         await pilot.press("F", "F")  # back through No status to every status
         assert len(firsts(app, "my-work")) == 9
 
         await pilot.press("R")  # the first repo in the repo set
         assert firsts(app, "my-work") == [
-            "▾ In Progress (1)",
-            "    tidepool#12",
-            "▾ In Review (1)",
-            "    tidepool#15 ⚠",
+            "In Progress (1)",
+            "tidepool#12",
+            "In Review (1)",
+            "tidepool#15 ⚠",
         ]
         await pilot.press("z")  # folds the group under the cursor
-        assert firsts(app, "my-work")[0] == "▸ In Progress (1)"
+        assert drawn(table(app, "my-work"))[0] == "▸ In Progress (1)"
         await pilot.press("Z")
-        assert firsts(app, "my-work") == ["▸ In Progress (1)", "▸ In Review (1)"]
+        assert drawn(table(app, "my-work")) == ["▸ In Progress (1)", "▸ In Review (1)"]
         await pilot.press("Z")
         assert len(firsts(app, "my-work")) == 4
 
-        assert firsts(app, "team") == ["▾ mo-kelp (0)"]
+        assert firsts(app, "team") == ["mo-kelp (0)"]
 
 
 async def test_r_refreshes_the_tab_on_screen():
@@ -127,7 +128,7 @@ async def test_r_refreshes_the_tab_on_screen():
         github.closed.add("octo-dev/tidepool#18")
         await pilot.press("r")
         await settled(pilot)
-        assert firsts(app, "unassigned") == ["▾ Todo (1)", "    lanternfish#13"]
+        assert firsts(app, "unassigned") == ["Todo (1)", "lanternfish#13"]
 
 
 async def test_enter_opens_the_detail_from_any_list_tab():
@@ -147,15 +148,15 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
         await settled(pilot)
         await open_tab(pilot, "team")
         await pilot.press("down", "down", "down", "down", "z")  # on lanternfish#11
-        assert firsts(app, "team")[:5] == [
+        assert drawn(table(app, "team"))[:5] == [
             "▾ octo-dev (5)",
             "    lanternfish#4",
             "    tidepool#12",
             "  ▸ lanternfish#9",
             "    tidepool#15 ⚠",
         ]
-        table = app.query_one("#team DataTable", DataTable)
-        assert str(table.get_row_at(table.cursor_row)[1]) == "  ▸ lanternfish#9"
+        team = table(app, "team")
+        assert drawn(team)[team.cursor_row] == "  ▸ lanternfish#9"
 
         await pilot.press("z")  # on the parent unfolds it
-        assert firsts(app, "team")[4] == "    └ lanternfish#11"
+        assert drawn(table(app, "team"))[4] == "    └ lanternfish#11"
