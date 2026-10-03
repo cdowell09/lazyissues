@@ -1,6 +1,7 @@
 import sys
 
 import pytest
+from listed import plain
 from textual.widgets import DataTable
 
 from lazyissues import __main__, demo
@@ -11,7 +12,7 @@ from lazyissues.github import GitHubError
 
 def rows(app: LazyIssuesApp) -> list[list[str]]:
     table = app.query_one("#my-work DataTable", DataTable)
-    return [[str(cell) for cell in table.get_row_at(i)[1:]] for i in range(table.row_count)]
+    return [[ref, *map(str, table.get_row_at(i)[2:])] for i, ref in enumerate(plain(table))]
 
 
 async def test_my_work_groups_my_open_issues_by_status_across_the_repo_set():

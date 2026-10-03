@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+from listed import plain
 from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, TabbedContent
 
@@ -46,7 +47,7 @@ def results(app: LazyIssuesApp) -> FilterResults:
 def firsts(app: LazyIssuesApp) -> list[str]:
     """The first cell of every row of the shown results: group headers and issue refs."""
     table = results(app).query_one(DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table)
 
 
 async def settled(pilot: Pilot) -> None:

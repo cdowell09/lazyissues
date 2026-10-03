@@ -60,9 +60,16 @@ class Row:
     """An issue as a group lists it: its sub-issues in the group follow it, indented."""
 
     issue: Issue
-    depth: int = 0  # how many parents above it in the group
+    # One entry per parent above it in the group, outermost first: whether a later
+    # sub-issue of that parent follows, so the tree's line carries on down past this row.
+    continues: tuple[bool, ...] = ()
     has_sub_issues: bool = False  # in the group, shown or folded
     folded: bool = False  # its sub-issues are hidden
+
+    @property
+    def depth(self) -> int:
+        """How many parents above it in the group."""
+        return len(self.continues)
 
     @property
     def lead(self) -> str | None:
@@ -169,16 +176,17 @@ def _nested(issues: list[Issue], folded: frozenset[str]) -> list[Row]:
             sub_issues.setdefault(issue.parent, []).append(issue)
     rows: list[Row] = []
 
-    def add(issue: Issue, depth: int) -> None:
+    def add(issue: Issue, continues: tuple[bool, ...]) -> None:
         subs = sub_issues.get(issue.key, [])
         hide = bool(subs) and issue.key in folded
-        rows.append(Row(issue, depth, bool(subs), hide))
-        for sub in [] if hide else subs:
-            add(sub, depth + 1)
+        rows.append(Row(issue, continues, bool(subs), hide))
+        shown = [] if hide else subs
+        for at, sub in enumerate(shown):
+            add(sub, (*continues, at < len(shown) - 1))
 
     for issue in issues:
         if issue.parent not in keys:
-            add(issue, 0)
+            add(issue, ())
     return rows
 
 

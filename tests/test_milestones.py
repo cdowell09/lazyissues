@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from listed import drawn, plain
 from textual.widgets import DataTable
 
 from lazyissues import demo
@@ -15,7 +16,7 @@ from lazyissues.views.milestones import Milestones
 
 def firsts(app: LazyIssuesApp) -> list[str]:
     table = app.query_one("#milestones DataTable", DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table)
 
 
 async def shown(app: LazyIssuesApp) -> list[str]:
@@ -33,11 +34,24 @@ async def test_lists_each_repos_milestones_with_progress_and_issues_by_status():
         "tidepool / v1.0 (1)  ░░░░░░░░░░ 0/1",
         "tidepool#18",
         "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",  # same title, another repo
-        "▾ lanternfish#9",  # a parent, unfolded
-        "└ lanternfish#7",
-        "└ lanternfish#11",
+        "lanternfish#9",  # a parent, its sub-issues under it
+        "lanternfish#7",
+        "lanternfish#11",
         "lanternfish#4",
     ]
+
+
+async def test_sub_issues_hang_off_their_parent_on_tree_lines():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert drawn(app.query_one("#milestones DataTable", DataTable))[-4:] == [
+            "  ▾ lanternfish#9",  # a parent, unfolded
+            "    ├ lanternfish#7",  # another sub-issue of #9 follows
+            "    └ lanternfish#11",  # the last
+            "    lanternfish#4",
+        ]
 
 
 async def test_pinned_milestones_limit_and_order_the_tab():

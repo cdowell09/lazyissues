@@ -1,5 +1,6 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
+from listed import drawn, plain
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
 
@@ -8,10 +9,13 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
 
 
+def table(app: LazyIssuesApp, view: str) -> DataTable:
+    return app.query_one(f"#{view} DataTable", DataTable)
+
+
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     """The first cell of every row: group headers and issue refs."""
-    table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table(app, view))
 
 
 async def open_tab(pilot: Pilot, view: str) -> None:
@@ -35,17 +39,18 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
         await settled(pilot)
-        assert firsts(app, "team") == [
-            "octo-dev (5)",  # the viewer, though not on the roster; two active issues
-            "lanternfish#4",
-            "tidepool#12",
-            "▾ lanternfish#9",  # a parent, unfolded
-            "└ lanternfish#11",  # a sub-issue under its parent
-            "tidepool#15 ⚠",
-            "sam-reef (2)",  # one active issue
-            "lanternfish#4",  # shared with the viewer
-            "lanternfish#9 → lanternfish#7",  # its parent is in another group
-            "mo-kelp (0)",  # on the roster with nothing assigned
+        # Issues indent under their group; a fold arrow has a column of its own.
+        assert drawn(table(app, "team")) == [
+            "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
+            "    lanternfish#4",
+            "    tidepool#12",
+            "  ▾ lanternfish#9",  # a parent, unfolded
+            "    └ lanternfish#11",  # a sub-issue under its parent
+            "    tidepool#15 ⚠",
+            "▾ sam-reef (2)",  # one active issue
+            "    lanternfish#4",  # shared with the viewer
+            "    lanternfish#9 → lanternfish#7",  # its parent is in another group
+            "▾ mo-kelp (0)",  # on the roster with nothing assigned
         ]
 
 
@@ -105,9 +110,9 @@ async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
             "tidepool#15 ⚠",
         ]
         await pilot.press("z")  # folds the group under the cursor
-        assert firsts(app, "my-work")[0] == "▸ In Progress (1)"
+        assert drawn(table(app, "my-work"))[0] == "▸ In Progress (1)"
         await pilot.press("Z")
-        assert firsts(app, "my-work") == ["▸ In Progress (1)", "▸ In Review (1)"]
+        assert drawn(table(app, "my-work")) == ["▸ In Progress (1)", "▸ In Review (1)"]
         await pilot.press("Z")
         assert len(firsts(app, "my-work")) == 4
 
@@ -143,15 +148,15 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
         await settled(pilot)
         await open_tab(pilot, "team")
         await pilot.press("down", "down", "down", "down", "z")  # on lanternfish#11
-        assert firsts(app, "team")[:5] == [
-            "octo-dev (5)",
-            "lanternfish#4",
-            "tidepool#12",
-            "▸ lanternfish#9",
-            "tidepool#15 ⚠",
+        assert drawn(table(app, "team"))[:5] == [
+            "▾ octo-dev (5)",
+            "    lanternfish#4",
+            "    tidepool#12",
+            "  ▸ lanternfish#9",
+            "    tidepool#15 ⚠",
         ]
-        table = app.query_one("#team DataTable", DataTable)
-        assert str(table.get_row_at(table.cursor_row)[1]) == "▸ lanternfish#9"
+        team = table(app, "team")
+        assert drawn(team)[team.cursor_row] == "  ▸ lanternfish#9"
 
         await pilot.press("z")  # on the parent unfolds it
-        assert firsts(app, "team")[4] == "└ lanternfish#11"
+        assert drawn(table(app, "team"))[4] == "    └ lanternfish#11"

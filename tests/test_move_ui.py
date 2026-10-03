@@ -4,6 +4,7 @@ import asyncio
 import webbrowser
 from collections.abc import Callable, Sequence
 
+from listed import plain
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Input, OptionList, Static
@@ -56,10 +57,9 @@ def groups(app: LazyIssuesApp) -> dict[str, list[str]]:
     """Each status group's issue keys, by the group's name."""
     shown: dict[str, list[str]] = {}
     group: list[str] = []
-    for row in table(app).ordered_rows:
+    for row, text in zip(table(app).ordered_rows, plain(table(app)), strict=True):
         if row.key.value is None:
-            header = str(table(app).get_row(row.key)[1])
-            group = shown.setdefault(header.rsplit(" (", 1)[0], [])
+            group = shown.setdefault(text.rsplit(" (", 1)[0], [])
         else:
             group.append(row.key.value)
     return shown

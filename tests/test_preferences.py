@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+from listed import plain
 from textual import events
 from textual.pilot import Pilot
 from textual.widgets import (
@@ -28,7 +29,7 @@ from lazyissues.status_list import StatusList
 
 def firsts(app: LazyIssuesApp, view: str) -> list[str]:
     table = app.query_one(f"#{view} DataTable", DataTable)
-    return [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+    return plain(table)
 
 
 def active_tab(app: LazyIssuesApp) -> str:

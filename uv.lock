@@ -111,7 +111,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "platformdirs", specifier = ">=4.12" },
-    { name = "textual", specifier = ">=8.2" },
+    { name = "textual", specifier = ">=8.2,<9" },
     { name = "tomlkit", specifier = ">=0.15" },
 ]
 

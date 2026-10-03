@@ -7,7 +7,7 @@ owns the tab's issue store and view state, and draws whatever
 """
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -50,6 +50,19 @@ from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
 CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
+DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
+# How a row stands out, by its table component class (`IssueTable.highlights`).
+GROUP_ROW, CHECKED_ROW = "issue-table--group", "issue-table--checked"
+
+
+def arrow(folded: bool | None) -> str:
+    """A row's fold arrow and the space after it; blank for an issue with nothing to fold."""
+    return "  " if folded is None else f"{FOLDED if folded else UNFOLDED} "
+
+
+# Issue rows start one arrow in, so an issue's arrow sits under its group's name and refs
+# line up whether or not an issue has sub-issues to fold.
+INDENT = arrow(None)
 
 
 class IssueTable(DataTable):
@@ -60,6 +73,24 @@ class IssueTable(DataTable):
     """
 
     ALLOW_SELECT = True
+    COMPONENT_CLASSES: ClassVar[set[str]] = {GROUP_ROW, CHECKED_ROW}
+    DEFAULT_CSS = """
+    IssueTable > .issue-table--group { background: $foreground 8%; text-style: bold; }
+    IssueTable > .issue-table--checked { background: $accent 20%; }
+    /* Bold marks a group header, so the cursor only colors its row. */
+    IssueTable:focus > .datatable--cursor { text-style: none; }
+    """
+    # Each row's component class, if it has one, by row index. Set it only with the rows
+    # themselves (`IssueList.show`): Textual caches drawn rows until they change.
+    highlights: Sequence[str | None] = ()
+
+    def _get_row_style(self, row_index: int, base_style: Style) -> Style:
+        # Textual's private hook (as of 8.2, hence `textual<9`) for the style of a row
+        # past its fixed checkbox column. A test of checked rows' backgrounds guards it.
+        style = super()._get_row_style(row_index, base_style)
+        if 0 <= row_index < len(self.highlights) and (name := self.highlights[row_index]):
+            style += self.get_component_rich_style(name)
+        return style
 
     def on_click(self, event: events.Click) -> None:
         event.prevent_default()
@@ -231,7 +262,7 @@ class IssueList(IssueActions, Widget):
 
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
-        table = self.query_one(DataTable)
+        table = self.query_one(IssueTable)
         row, selected = table.cursor_row, None
         if table.rows:
             selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -241,8 +272,7 @@ class IssueList(IssueActions, Widget):
         self._groups = {group.name: group for group in groups}
         for group in groups:
             mark = self._mark(issue.key for issue in group.issues)
-            header = Text(self.header(group), style="bold")
-            table.add_row(mark, header, *[""] * (len(COLUMNS) - 2))
+            table.add_row(mark, self.header(group), *[""] * (len(COLUMNS) - 2))
             self._rows.append((group.name, None))
             for listed in group.rows:
                 # Team lists a shared issue under each assignee; row keys must be unique.
@@ -254,33 +284,42 @@ class IssueList(IssueActions, Widget):
             # With nothing loaded, a failed refresh's error stays after its toast goes.
             message = "No issues match." if self.state.filtering else self.error or self.EMPTY
             table.add_row("", "", message, *[""] * (len(COLUMNS) - 3))
+        table.highlights = [
+            GROUP_ROW if row is None else CHECKED_ROW if self._checked([row.issue.key]) else None
+            for _, row in self._rows
+        ]
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)
         table.move_cursor(row=row)
         self._show_filters()
 
-    def _mark(self, keys: Iterable[str]) -> str:
-        """Checked when every one of the issues `keys` is selected (and there is one)."""
+    def _checked(self, keys: Iterable[str]) -> bool:
+        """Whether every one of the issues `keys` is selected (and there is one)."""
         keys = set(keys)
-        return CHECKED if keys and keys <= self.state.selected else UNCHECKED
+        return bool(keys) and keys <= self.state.selected
 
-    def header(self, group: Group) -> str:
+    def _mark(self, keys: Iterable[str]) -> Text:
+        return Text(CHECKED) if self._checked(keys) else Text(UNCHECKED, DIM)
+
+    def header(self, group: Group) -> Text:
         """A group's header row; a tab may add to it."""
-        return f"{f'{FOLDED} ' if group.folded else ''}{group.name} ({group.total})"
+        return Text.assemble(arrow(group.folded), f"{group.name} ", (f"({group.total})", DIM))
 
-    def _cells(self, row: Row) -> tuple[str, ...]:
+    def _cells(self, row: Row) -> tuple[str | Text, ...]:
         issue = row.issue
         status = self.rules.status_of(issue)
         pending = self.store.moves.pending(issue.key)
-        ref = "".join(
-            [
-                f"{'  ' * (row.depth - 1)}└ " if row.depth else "",
-                f"{FOLDED} " if row.folded else f"{UNFOLDED} " if row.has_sub_issues else "",
-                f"{row.lead} → " if row.lead else "",
-                issue.ref,
-                " ⚠" if status.ambiguous else "",
-                f" ⋯ {pending}" if pending else "",
-            ]
+        tree = "".join("│ " if more else "  " for more in row.continues[:-1])
+        if row.continues:
+            tree += "├ " if row.continues[-1] else "└ "
+        ref = Text.assemble(
+            INDENT,
+            arrow(row.folded if row.has_sub_issues else None),
+            (tree, DIM),
+            (f"{row.lead} → " if row.lead else "", DIM),
+            issue.ref,
+            " ⚠" if status.ambiguous else "",
+            (f" ⋯ {pending}" if pending else "", DIM),
         )
         return (
             ref,
