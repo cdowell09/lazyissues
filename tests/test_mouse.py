@@ -20,6 +20,7 @@ from lazyissues.preferences import PreferencesScreen
 from lazyissues.setup import SetupApp, SourcesScreen
 from lazyissues.status_list import StatusList
 from lazyissues.views.filters import Filters
+from lazyissues.views.issue_list import FOLDED, UNFOLDED
 
 
 async def until(pilot: Pilot, condition: Callable[[], bool]) -> None:
@@ -138,7 +139,7 @@ async def test_clicking_a_row_selects_it_and_clicking_it_again_opens_it():
 
         await click_row(pilot, 1, x=30)  # anywhere on the selected row
         assert isinstance(app.screen, IssueDetailScreen)
-        assert app.screen.issue.ref == first_cell(app, 1)
+        assert app.screen.issue.ref == first_cell(app, 1).lstrip()
 
 
 async def test_clicking_a_group_header_folds_and_unfolds_it():
@@ -146,9 +147,10 @@ async def test_clicking_a_group_header_folds_and_unfolds_it():
     async with app.run_test() as pilot:
         await settled(pilot)
         header = first_cell(app, 0)
+        assert header.startswith(UNFOLDED)
         await click_row(pilot, 1)  # an issue, so the header isn't selected
         await click_row(pilot, 0)
-        assert first_cell(app, 0) == f"▸ {header}"
+        assert first_cell(app, 0) == header.replace(UNFOLDED, FOLDED, 1)
         await click_row(pilot, 0)
         assert first_cell(app, 0) == header
 
@@ -158,14 +160,15 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
     async with app.run_test() as pilot:
         await settled(pilot)
         await click_tab(pilot, "Team")
-        assert first_cell(app, 3, "team") == "▾ lanternfish#9"
-        assert first_cell(app, 4, "team") == "└ lanternfish#11"
+        assert first_cell(app, 3, "team") == "  ▾ lanternfish#9"
+        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
 
-        await click_row(pilot, 3, x=ISSUE_TEXT, view="team")  # the arrow
-        assert first_cell(app, 3, "team") == "▸ lanternfish#9"
-        assert first_cell(app, 4, "team") == "tidepool#15 ⚠"
-        await click_row(pilot, 3, x=ISSUE_TEXT, view="team")
-        assert first_cell(app, 4, "team") == "└ lanternfish#11"
+        arrow = ISSUE_TEXT + 2  # under its group's name
+        await click_row(pilot, 3, x=arrow, view="team")
+        assert first_cell(app, 3, "team") == "  ▸ lanternfish#9"
+        assert first_cell(app, 4, "team") == "    tidepool#15 ⚠"
+        await click_row(pilot, 3, x=arrow, view="team")
+        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
         assert not isinstance(app.screen, IssueDetailScreen)
 
 
@@ -179,7 +182,7 @@ async def test_clicking_a_tab_shows_it_and_its_rows_are_clickable():
         await click_row(pilot, 1, view="team")
         await click_row(pilot, 1, view="team")
         assert isinstance(app.screen, IssueDetailScreen)
-        assert app.screen.issue.ref == first_cell(app, 1, "team")
+        assert app.screen.issue.ref == first_cell(app, 1, "team").lstrip()
 
 
 async def test_clicking_a_move_option_chooses_it_and_clicking_it_again_takes_it():

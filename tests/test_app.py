@@ -19,16 +19,16 @@ async def test_my_work_groups_my_open_issues_by_status_across_the_repo_set():
     async with app.run_test() as pilot:
         await pilot.app.workers.wait_for_complete()
         assert [row[0] for row in rows(app)] == [
-            "No status (1)",
-            "lanternfish#9",
+            "▾ No status (1)",
+            "    lanternfish#9",
             # A label-backed `in-progress` and a project's "In Progress" are one group.
-            "In Progress (2)",
-            "tidepool#12",
-            "lanternfish#4",
-            "In Review (1)",
-            "tidepool#15 ⚠",  # two status labels
-            "Blocked (1)",  # not a configured status, so after the configured ones
-            "lanternfish#9 → lanternfish#11",  # a sub-issue whose parent is in another group
+            "▾ In Progress (2)",
+            "    tidepool#12",
+            "    lanternfish#4",
+            "▾ In Review (1)",
+            "    tidepool#15 ⚠",  # two status labels
+            "▾ Blocked (1)",  # not a configured status, so after the configured ones
+            "    lanternfish#9 → lanternfish#11",  # a sub-issue whose parent is in another group
         ]
         assert rows(app)[4][2:4] == ["In Progress", "octo-dev, sam-reef"]
 

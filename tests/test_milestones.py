@@ -27,16 +27,16 @@ async def shown(app: LazyIssuesApp) -> list[str]:
 
 async def test_lists_each_repos_milestones_with_progress_and_issues_by_status():
     assert await shown(LazyIssuesApp(demo.config(), demo.github())) == [
-        "tidepool / v0.4 (2)  ███░░░░░░░ 1/3",  # done counts every closed issue in it
-        "tidepool#12",
-        "tidepool#15 ⚠",
-        "tidepool / v1.0 (1)  ░░░░░░░░░░ 0/1",
-        "tidepool#18",
-        "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",  # same title, another repo
-        "▾ lanternfish#9",  # a parent, unfolded
-        "└ lanternfish#7",
-        "└ lanternfish#11",
-        "lanternfish#4",
+        "▾ tidepool / v0.4 (2)  ███░░░░░░░ 1/3",  # done counts every closed issue in it
+        "    tidepool#12",
+        "    tidepool#15 ⚠",
+        "▾ tidepool / v1.0 (1)  ░░░░░░░░░░ 0/1",
+        "    tidepool#18",
+        "▾ lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",  # same title, another repo
+        "  ▾ lanternfish#9",  # a parent, unfolded
+        "    ├ lanternfish#7",  # more sub-issues of #9 follow
+        "    └ lanternfish#11",
+        "    lanternfish#4",
     ]
 
 
@@ -47,8 +47,8 @@ async def test_pinned_milestones_limit_and_order_the_tab():
     )
     found = await shown(LazyIssuesApp(config, demo.github()))
     assert [row for row in found if " / " in row] == [
-        "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",
-        "tidepool / v0.4 (2)  ███░░░░░░░ 1/3",
+        "▾ lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",
+        "▾ tidepool / v0.4 (2)  ███░░░░░░░ 1/3",
     ]
 
 
@@ -72,7 +72,7 @@ async def test_repo_filter_hides_other_repos_milestones():
         app.query_one(Milestones).state = ViewState(repo="octo-dev/lanternfish")
         await pilot.pause()
         assert [row for row in firsts(app) if " / " in row] == [
-            "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5"
+            "▾ lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5"
         ]
 
 
@@ -87,7 +87,7 @@ async def test_opens_from_the_snapshot_before_github_answers(tmp_path):
     found = await shown(LazyIssuesApp(demo.config(), offline, cache=tmp_path))
     # The snapshot's milestones, without progress until GitHub answers.
     assert [row for row in found if " / " in row] == [
-        "tidepool / v0.4 (2)",
-        "tidepool / v1.0 (1)",
-        "lanternfish / v1.0 (4)",
+        "▾ tidepool / v0.4 (2)",
+        "▾ tidepool / v1.0 (1)",
+        "▾ lanternfish / v1.0 (4)",
     ]

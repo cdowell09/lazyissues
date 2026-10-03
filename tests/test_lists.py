@@ -36,16 +36,16 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
     async with app.run_test() as pilot:
         await settled(pilot)
         assert firsts(app, "team") == [
-            "octo-dev (5)",  # the viewer, though not on the roster; two active issues
-            "lanternfish#4",
-            "tidepool#12",
-            "▾ lanternfish#9",  # a parent, unfolded
-            "└ lanternfish#11",  # a sub-issue under its parent
-            "tidepool#15 ⚠",
-            "sam-reef (2)",  # one active issue
-            "lanternfish#4",  # shared with the viewer
-            "lanternfish#9 → lanternfish#7",  # its parent is in another group
-            "mo-kelp (0)",  # on the roster with nothing assigned
+            "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
+            "    lanternfish#4",
+            "    tidepool#12",
+            "  ▾ lanternfish#9",  # a parent, unfolded
+            "    └ lanternfish#11",  # a sub-issue under its parent
+            "    tidepool#15 ⚠",
+            "▾ sam-reef (2)",  # one active issue
+            "    lanternfish#4",  # shared with the viewer
+            "    lanternfish#9 → lanternfish#7",  # its parent is in another group
+            "▾ mo-kelp (0)",  # on the roster with nothing assigned
         ]
 
 
@@ -54,10 +54,10 @@ async def test_unassigned_lists_open_issues_without_an_assignee_by_status():
     async with app.run_test() as pilot:
         await settled(pilot)
         assert firsts(app, "unassigned") == [
-            "No status (1)",
-            "tidepool#18",
-            "Todo (1)",
-            "lanternfish#13",
+            "▾ No status (1)",
+            "    tidepool#18",
+            "▾ Todo (1)",
+            "    lanternfish#13",
         ]
 
 
@@ -69,10 +69,10 @@ async def test_d_shows_issues_closed_within_the_done_window():
         await pilot.press("d")
         await settled(pilot)
         # tidepool#10 closed two days ago; lanternfish#2 forty days ago, outside the window.
-        assert firsts(app, "my-work")[-2:] == ["Done (1)", "tidepool#10"]
+        assert firsts(app, "my-work")[-2:] == ["▾ Done (1)", "    tidepool#10"]
 
         await pilot.press("d")
-        assert "Done (1)" not in firsts(app, "my-work")
+        assert "▾ Done (1)" not in firsts(app, "my-work")
 
 
 async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
@@ -81,28 +81,32 @@ async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
         await settled(pilot)
         await open_tab(pilot, "my-work")
         await pilot.press("slash", *"glow", "enter")
-        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
+        assert firsts(app, "my-work") == ["▾ In Progress (1)", "    lanternfish#4"]
 
         await open_tab(pilot, "team")
         await pilot.press("slash", *"mo-k", "enter")
-        assert firsts(app, "team") == ["mo-kelp (0)"]
+        assert firsts(app, "team") == ["▾ mo-kelp (0)"]
 
         await open_tab(pilot, "my-work")
-        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
+        assert firsts(app, "my-work") == ["▾ In Progress (1)", "    lanternfish#4"]
         await pilot.press("escape")  # clears the search
         assert len(firsts(app, "my-work")) == 9
 
         await pilot.press("f", "f")  # No status, then In Progress
-        assert firsts(app, "my-work") == ["In Progress (2)", "tidepool#12", "lanternfish#4"]
+        assert firsts(app, "my-work") == [
+            "▾ In Progress (2)",
+            "    tidepool#12",
+            "    lanternfish#4",
+        ]
         await pilot.press("F", "F")  # back through No status to every status
         assert len(firsts(app, "my-work")) == 9
 
         await pilot.press("R")  # the first repo in the repo set
         assert firsts(app, "my-work") == [
-            "In Progress (1)",
-            "tidepool#12",
-            "In Review (1)",
-            "tidepool#15 ⚠",
+            "▾ In Progress (1)",
+            "    tidepool#12",
+            "▾ In Review (1)",
+            "    tidepool#15 ⚠",
         ]
         await pilot.press("z")  # folds the group under the cursor
         assert firsts(app, "my-work")[0] == "▸ In Progress (1)"
@@ -111,7 +115,7 @@ async def test_search_focus_folds_and_repo_filter_are_remembered_per_tab():
         await pilot.press("Z")
         assert len(firsts(app, "my-work")) == 4
 
-        assert firsts(app, "team") == ["mo-kelp (0)"]
+        assert firsts(app, "team") == ["▾ mo-kelp (0)"]
 
 
 async def test_r_refreshes_the_tab_on_screen():
@@ -123,7 +127,7 @@ async def test_r_refreshes_the_tab_on_screen():
         github.closed.add("octo-dev/tidepool#18")
         await pilot.press("r")
         await settled(pilot)
-        assert firsts(app, "unassigned") == ["Todo (1)", "lanternfish#13"]
+        assert firsts(app, "unassigned") == ["▾ Todo (1)", "    lanternfish#13"]
 
 
 async def test_enter_opens_the_detail_from_any_list_tab():
@@ -144,14 +148,14 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
         await open_tab(pilot, "team")
         await pilot.press("down", "down", "down", "down", "z")  # on lanternfish#11
         assert firsts(app, "team")[:5] == [
-            "octo-dev (5)",
-            "lanternfish#4",
-            "tidepool#12",
-            "▸ lanternfish#9",
-            "tidepool#15 ⚠",
+            "▾ octo-dev (5)",
+            "    lanternfish#4",
+            "    tidepool#12",
+            "  ▸ lanternfish#9",
+            "    tidepool#15 ⚠",
         ]
         table = app.query_one("#team DataTable", DataTable)
-        assert str(table.get_row_at(table.cursor_row)[1]) == "▸ lanternfish#9"
+        assert str(table.get_row_at(table.cursor_row)[1]) == "  ▸ lanternfish#9"
 
         await pilot.press("z")  # on the parent unfolds it
-        assert firsts(app, "team")[4] == "└ lanternfish#11"
+        assert firsts(app, "team")[4] == "    └ lanternfish#11"

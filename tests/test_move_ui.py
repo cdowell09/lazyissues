@@ -59,7 +59,7 @@ def groups(app: LazyIssuesApp) -> dict[str, list[str]]:
     for row in table(app).ordered_rows:
         if row.key.value is None:
             header = str(table(app).get_row(row.key)[1])
-            group = shown.setdefault(header.rsplit(" (", 1)[0], [])
+            group = shown.setdefault(header[2:].rsplit(" (", 1)[0], [])  # after its arrow
         else:
             group.append(row.key.value)
     return shown

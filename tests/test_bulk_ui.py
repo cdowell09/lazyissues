@@ -64,6 +64,24 @@ async def cursor_to(pilot: Pilot, key: str) -> None:
     await pilot.pause()
 
 
+async def test_a_checked_issue_and_each_group_header_stand_out_across_the_row():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await cursor_to(pilot, TIDE_12)
+        await pilot.press("space")
+        await cursor_to(pilot, TIDE_15)  # the cursor's own color elsewhere
+
+        def background(row: int) -> object:
+            """The background in the Title column of `row`, past the checkbox."""
+            at = table(app).region
+            return app.screen.get_style_at(at.x + 40, at.y + 1 + row).bgcolor
+
+        checked_row = table(app).get_row_index(TIDE_12)
+        plain_row = table(app).get_row_index(LANTERN_4)
+        header_row = checked_row - 1
+        assert len({background(checked_row), background(plain_row), background(header_row)}) == 3
+
+
 async def test_space_checks_an_issue_or_a_whole_group_and_u_clears_them():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
@@ -138,7 +156,7 @@ def groups(app: App, view: str = "my-work") -> dict[str, list[str]]:
     for row in table(app, view).ordered_rows:
         if row.key.value is None:
             header = str(table(app, view).get_row(row.key)[1])
-            group = shown.setdefault(header.rsplit(" (", 1)[0], [])
+            group = shown.setdefault(header[2:].rsplit(" (", 1)[0], [])  # after its arrow
         else:
             group.append(row.key.value)
     return shown

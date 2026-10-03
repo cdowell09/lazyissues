@@ -39,7 +39,7 @@ A saved filter is a name and a query in [GitHub's issue search syntax](https://d
 
 In the sidebar, `n` adds a filter, `e` edits the highlighted one and `x` deletes it after you confirm; each change is saved to `config.toml` at once, keeping your comments. Each filter's results keep their own snapshot, search and folds.
 
-In every tab, a sub-issue whose parent is in the same group is indented under it (`└ lanternfish#7`); otherwise its row leads with the parent (`lanternfish#9 → lanternfish#7`). `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
+In every tab, issues are indented under their group's header, and a sub-issue whose parent is in the same group hangs under it on a tree line (`├ lanternfish#7`, `└ lanternfish#11`); otherwise its row leads with the parent, dimmed (`lanternfish#9 → lanternfish#7`). A parent's `▾`/`▸` sits in a column of its own, so every issue number lines up. `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
 
 ## Statuses
 
@@ -121,7 +121,7 @@ The issue keeps its status until GitHub confirms the move; the list and detail s
 
 ## Bulk actions
 
-`Space` selects the issue under the cursor (`☑`), or on a group header every issue in the group, folded or not; `A` selects every issue the tab shows and `u` clears the selection. Each tab keeps its own selection, through refreshes, and the line under the list counts it. Issues a search or filter hides stay selected.
+`Space` selects the issue under the cursor (`☑`, and its row is tinted), or on a group header every issue in the group, folded or not; `A` selects every issue the tab shows and `u` clears the selection. Each tab keeps its own selection, through refreshes, and the line under the list counts it. Issues a search or filter hides stay selected.
 
 `B` acts on the selected issues:
 
