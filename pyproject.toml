@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28",
     "platformdirs>=4.12",
-    "textual>=8.2",
+    "textual>=8.2,<9",  # IssueTable overrides a private hook
     "tomlkit>=0.15",
 ]
 classifiers = [

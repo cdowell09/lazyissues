@@ -2,6 +2,8 @@
 
 import asyncio
 
+from rich.text import Text
+
 from lazyissues.models import Milestone
 from lazyissues.view_model import Group, Grouping, by_milestone, pinned, progress_bar
 from lazyissues.views.issue_list import IssueList
@@ -37,9 +39,10 @@ class Milestones(IssueList):
         shown = [m for m in self.milestones if self.state.repo in (None, m.repo)]
         return by_milestone(self.rules, shown)
 
-    def header(self, group: Group) -> str:
+    def header(self, group: Group) -> Text:
+        header = super().header(group)
         milestone = next((m for m in self.found or [] if m.name == group.name), None)
         if milestone is None:  # a snapshot's milestone, until GitHub gives its progress
-            return super().header(group)
+            return header
         done = milestone.closed
-        return f"{super().header(group)}  {progress_bar(done, milestone.open + done)}"
+        return header.append(f"  {progress_bar(done, milestone.open + done)}")

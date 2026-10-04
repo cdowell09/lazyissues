@@ -195,6 +195,19 @@ def test_sub_issues_indent_under_a_parent_in_the_same_group():
     ]
 
 
+def test_each_sub_issue_knows_where_its_tree_lines_carry_on():
+    issues = [*FAMILY, issue(7, "todo", parent="a/x#1")]  # a second sub-issue of #1
+    (todo, *_) = visible_groups(issues, by_status(RULES), RULES, DEFAULT)
+    assert [(r.issue.number, r.continues) for r in todo.rows] == [
+        (1, ()),
+        (2, (True,)),  # #7 follows it under #1
+        (4, (True, False)),  # under #2, whose line carries on to #7; the last under #2
+        (7, (False,)),  # the last under #1
+        (3, ()),
+        (6, ()),
+    ]
+
+
 def test_folding_a_parent_hides_its_sub_issues_but_the_total_counts_them():
     assert nested(FAMILY, ViewState().toggle_fold("a/x#1"))[0] == (
         "Todo",
