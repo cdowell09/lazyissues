@@ -164,6 +164,7 @@ class IssueList(IssueActions, Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.writer = writer  # the app's, shared by every view
+        self._loaded = False  # the first refresh has started
         self._read_again = False  # a reload was asked for during a refresh
         self.rules = StatusRules(config)
         self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
@@ -196,7 +197,12 @@ class IssueList(IssueActions, Widget):
         self.writer.changed.subscribe(self, self._on_written)
         if self.store.issues:
             self.show()
-        self.reload()
+
+    def on_show(self) -> None:
+        # The first refresh waits until the tab is shown, so startup reads only the start tab.
+        if not self._loaded:
+            self._loaded = True
+            self.reload()
 
     def watch_refreshing(self, refreshing: bool) -> None:
         self.set_class(refreshing, "-refreshing")
@@ -215,7 +221,8 @@ class IssueList(IssueActions, Widget):
         self.config = config
         self.rules = StatusRules(config)
         self.show()
-        self.reload()
+        if self._loaded:  # a tab not yet shown refreshes with the new config when it is
+            self.reload()
 
     def reload(self) -> None:
         """Refresh from GitHub in the background; during a refresh, read again after it."""

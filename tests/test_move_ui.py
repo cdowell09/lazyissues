@@ -4,7 +4,7 @@ import asyncio
 import webbrowser
 from collections.abc import Callable, Sequence
 
-from listed import plain
+from listed import plain, show_tab
 from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets import DataTable, Input, OptionList, Static
@@ -132,6 +132,10 @@ async def test_a_move_shows_as_pending_until_github_confirms_it():
     github = Gated()
     app = LazyIssuesApp(demo.config(), github)
     async with app.run_test() as pilot:
+        await show_tab(pilot, "team")
+        await show_tab(pilot, "milestones")
+        await show_tab(pilot, "my-work")
+        table(app).focus()
         await select(pilot, TIDE_12)
         github.writes.clear()
         await pilot.press("m")

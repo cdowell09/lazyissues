@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import replace
 
-from listed import plain
+from listed import plain, show_tab
 from textual import events
 from textual.pilot import Pilot
 from textual.widgets import (
@@ -51,6 +51,7 @@ async def test_the_app_starts_with_the_saved_theme_tab_and_done_visibility():
         assert app.theme == "nord"
         assert active_tab(app) == "Unassigned"
         assert app.focused is app.query_one("#unassigned DataTable")
+        await show_tab(pilot, "my-work")
         assert firsts(app, "my-work")[-2:] == ["Done (1)", "tidepool#10"]
 
 
@@ -159,11 +160,13 @@ async def test_saving_preferences_writes_config_and_applies_them_at_once(tmp_pat
             "Blocked (1)",
             "Done (1)",
         ]
+        await show_tab(pilot, "team")
         assert [row for row in firsts(app, "team") if "(" in row] == [
             "octo-dev (6)",
             "sam-reef (2)",
             "new-dev (0)",
         ]
+        await show_tab(pilot, "milestones")
         milestones = [row for row in firsts(app, "milestones") if "(" in row]
         assert [row.split("  ")[0] for row in milestones] == ["tidepool / v0.4 (3)"]  # done shown
         # The new key is a move shortcut at once.
