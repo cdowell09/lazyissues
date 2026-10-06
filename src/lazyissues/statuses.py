@@ -1,7 +1,7 @@
 """Status rules: the one place statuses are interpreted (ADR 0001)."""
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from lazyissues.config import Config, Repo
@@ -100,12 +100,16 @@ class StatusRules:
         """Each status's move shortcut, lowercase, to the status's name."""
         return {s.key.lower(): s.name for s in self._statuses.values() if s.key}
 
-    def group(self, issues: list[Issue]) -> list[StatusGroup]:
+    def group(
+        self, issues: list[Issue], status_of: Callable[[Issue], IssueStatus] | None = None
+    ) -> list[StatusGroup]:
         """Issues by status in display order: "No status", the configured
-        statuses in order, unknown statuses in the order first seen, then Done."""
+        statuses in order, unknown statuses in the order first seen, then Done.
+        `status_of` supplies statuses already resolved."""
+        status_of = status_of or self.status_of
         groups: dict[str, StatusGroup] = {}
         for issue in issues:
-            name = self.status_of(issue).name
+            name = status_of(issue).name
             groups.setdefault(normalize(name), StatusGroup(name, [])).issues.append(issue)
         # sorted() is stable, so unknown statuses, which share a rank, stay first-seen.
         return sorted(
