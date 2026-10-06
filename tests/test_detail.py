@@ -250,6 +250,33 @@ async def test_stepping_mid_fill_shows_only_the_new_issue():
         assert markdown(app) == ["Body", *(f"#2 comment {n}" for n in range(60))]
 
 
+async def test_stepping_from_a_long_issue_to_a_short_one_within_a_frame_adds_nothing_of_the_first():
+    class Held(FakeGitHub):
+        """Never answers the detail fetch, as a slow network wouldn't within the test."""
+
+        async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+            await asyncio.Event().wait()
+            raise AssertionError
+
+    long = long_thread()
+    app = app_on(Held(viewer=long.viewer, issues=long.issues))
+    app.details.update(long.details)  # both cached, so both draw at once
+    app.details["o/r#2"] = IssueDetail(
+        issue(2), body="Short", activity=(Event("kim", AT, "commented", "Only comment"),)
+    )
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter")
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+
+        screen.refresh_content()  # draws #1 and queues the fill of its comments...
+        screen.action_step(1)  # ...but #2 is shown before the fill gets to run
+        await pilot.pause(0.5)  # longer than the fill's pauses
+
+        assert markdown(app) == ["Short", "Only comment"]
+
+
 def detail_children(app: LazyIssuesApp) -> list:
     return list(app.screen.query_one("#detail").children)
 

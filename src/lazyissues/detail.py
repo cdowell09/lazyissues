@@ -8,6 +8,7 @@ import asyncio
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from functools import partial
 
 from textual import events
 from textual.app import ComposeResult
@@ -168,6 +169,7 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         self.select = select
         self.showing_activity = False
         self.error: str | None = None  # why the latest fetch of this issue failed
+        self._draws = 0  # counts redraws, so a fill queued by an earlier one can tell
 
     @property
     def issue(self) -> Issue:
@@ -209,6 +211,7 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
             widgets.append(_line("Loading…", "meta"))
         render = _activity_widgets if self.showing_activity else _detail_widgets
         widgets += render(issue, detail)
+        self._draws += 1
         content = self.query_one("#detail", VerticalScroll)
         self.workers.cancel_group(self, "fill")  # a half-filled earlier draw must not add to this
         content.remove_children()
@@ -217,15 +220,20 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         content.scroll_home(animate=False)
         if rest:
             # After the first screen has been laid out and painted, not before.
-            self.call_after_refresh(
-                self.run_worker, self.fill(content, rest), group="fill", exclusive=True
-            )
+            # The fill is queued, so a redraw before it starts can't cancel it: `fill` checks
+            # for that itself.
+            fill = partial(self.fill, self._draws, content, rest)
+            self.call_after_refresh(self.run_worker, fill, group="fill", exclusive=True)
 
-    async def fill(self, content: VerticalScroll, widgets: list[Widget]) -> None:
-        # Markdown costs ~15ms a block to mount, so the rest comes in batches that
-        # redrawing, stepping or closing cancels.
+    async def fill(self, draw: int, content: VerticalScroll, widgets: list[Widget]) -> None:
+        """Mount `widgets` after the first screen of `draw`, unless another draw replaced it.
+
+        Markdown costs ~15ms a block to mount, so the rest comes in batches that
+        redrawing, stepping or closing cancels."""
         for start in range(0, len(widgets), _BATCH):
             await asyncio.sleep(_PAUSE)  # lets the screen paint
+            if draw != self._draws:
+                return
             await content.mount_all(widgets[start : start + _BATCH])
 
     async def fetch(self, issue: Issue) -> None:
