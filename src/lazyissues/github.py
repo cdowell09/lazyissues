@@ -4,8 +4,8 @@ import asyncio
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
@@ -33,6 +33,21 @@ class GitHubError(Exception):
     pass
 
 
+class RateLimited(GitHubError):
+    """GitHub's rate limit, saying when to try again; `retry_after` is seconds, if it said."""
+
+    def __init__(self, headers: httpx.Headers) -> None:
+        self.retry_after: int | None = None
+        when = "later"
+        if (wait := headers.get("retry-after", "")).isdigit():
+            self.retry_after = int(wait)
+            when = f"in {wait} seconds"
+        elif (reset := headers.get("x-ratelimit-reset", "")).isdigit():
+            at = datetime.fromtimestamp(int(reset), UTC)
+            when = f"at {at:%H:%M} UTC"
+        super().__init__(f"GitHub's rate limit was reached; try again {when}.")
+
+
 class Gateway(Protocol):
     async def search_issues(self, query: str) -> list[Issue]: ...
 
@@ -44,7 +59,9 @@ class Gateway(Protocol):
 
     async def repo_projects(self, repo: str) -> list[Project]: ...
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]: ...
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """`fresh` skips any cache, for counts that must be current."""
+        ...
 
     async def assignable_users(self, repo: str) -> list[str]: ...
 
@@ -387,7 +404,13 @@ def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
 
 
 class GraphQLGateway:
-    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._sleep = sleep
         if transport is None and "pytest" in sys.modules:
             raise RuntimeError("Tests must not reach GitHub; pass a fake transport.")
         self._client = httpx.AsyncClient(
@@ -401,27 +424,53 @@ class GraphQLGateway:
         self._user_ids: dict[str, str] = {}
         self._label_nodes: dict[str, list[dict[str, Any]]] = {}
         self._boards: dict[str, dict[str, Any]] = {}
+        self._milestone_nodes: dict[str, list[dict[str, Any]]] = {}
+        self._assignable: dict[str, list[str]] = {}
         self._viewer: tuple[str, set[str]] | None = None
 
     async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
         return (await self._send(query, **variables))[0]
 
     async def _send(self, query: str, **variables: Any) -> tuple[dict[str, Any], httpx.Headers]:
-        """The query's data, and the response headers."""
+        """The query's data, and the response headers.
+
+        A rate-limited search waits out `Retry-After` and goes again once; a mutation never
+        goes twice, as GitHub may have applied it.
+        """
+        try:
+            return await self._post(query, variables)
+        except RateLimited as limit:
+            wait = limit.retry_after
+            if wait is None or query.lstrip().startswith("mutation"):
+                raise
+        await self._sleep(wait)
+        return await self._post(query, variables)
+
+    async def _post(
+        self, query: str, variables: dict[str, Any]
+    ) -> tuple[dict[str, Any], httpx.Headers]:
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}
             )
         except httpx.HTTPError as e:
             raise GitHubError(f"Couldn't reach GitHub: {e}") from e
+        headers = response.headers
+        if response.status_code == 429 or (
+            response.status_code == 403
+            and ("retry-after" in headers or headers.get("x-ratelimit-remaining") == "0")
+        ):
+            raise RateLimited(headers)
         if response.status_code == 401:
             raise GitHubError("GitHub rejected the `gh` token. Run `gh auth login`.")
         if response.is_error:
             raise GitHubError(f"GitHub returned HTTP {response.status_code}.")
         body = response.json()
         if errors := body.get("errors"):
+            if any(e.get("type") == "RATE_LIMITED" for e in errors):
+                raise RateLimited(headers)
             raise GitHubError("; ".join(e["message"] for e in errors))
-        return body["data"], response.headers
+        return body["data"], headers
 
     async def _nodes(
         self, query: str, connection: Callable[[dict[str, Any]], Any], **variables: Any
@@ -470,11 +519,12 @@ class GraphQLGateway:
             if node and not node["closed"]
         ]
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
-        """`repo`'s open milestones, soonest due first, with their issue counts."""
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """`repo`'s open milestones, soonest due first, with their issue counts (as of the
+        last read, unless `fresh`)."""
         return [
             Milestone(repo, node["title"], node["open"]["totalCount"], node["closed"]["totalCount"])
-            for node in await self._milestones(repo)
+            for node in await self._milestones(repo, fresh)
         ]
 
     async def project_status_options(self, project: str) -> list[str]:
@@ -544,14 +594,16 @@ class GraphQLGateway:
         await self._mutate("reopenIssue", {"issueId": await self._issue_id(repo, number)})
 
     async def assignable_users(self, repo: str) -> list[str]:
-        owner, name = repo.split("/", 1)
-        users = await self._nodes(
-            _ASSIGNABLE_USERS,
-            lambda d: d["repository"]["assignableUsers"],
-            owner=owner,
-            name=name,
-        )
-        return [user["login"] for user in users]
+        if repo not in self._assignable:
+            owner, name = repo.split("/", 1)
+            users = await self._nodes(
+                _ASSIGNABLE_USERS,
+                lambda d: d["repository"]["assignableUsers"],
+                owner=owner,
+                name=name,
+            )
+            self._assignable[repo] = [user["login"] for user in users]
+        return self._assignable[repo]
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         fields = {"subjectId": await self._issue_id(repo, number), "body": body}
@@ -653,12 +705,14 @@ class GraphQLGateway:
             )
         return self._label_nodes[repo]
 
-    async def _milestones(self, repo: str) -> list[dict[str, Any]]:
+    async def _milestones(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
         """Every open milestone of `repo`, soonest due first, with its ID."""
-        owner, name = repo.split("/", 1)
-        return await self._nodes(
-            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
-        )
+        if fresh or repo not in self._milestone_nodes:
+            owner, name = repo.split("/", 1)
+            self._milestone_nodes[repo] = await self._nodes(
+                _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
+            )
+        return self._milestone_nodes[repo]
 
     async def _label_ids(self, repo: str, labels: Sequence[str]) -> list[str]:
         if not labels:
@@ -670,6 +724,8 @@ class GraphQLGateway:
         if milestone is None:
             return None
         ids = {m["title"]: m["id"] for m in await self._milestones(repo)}
+        if milestone not in ids:  # made on GitHub since we read them
+            ids = {m["title"]: m["id"] for m in await self._milestones(repo, fresh=True)}
         return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:

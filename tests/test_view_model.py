@@ -252,3 +252,17 @@ def test_progress_bar_fills_with_the_share_of_done_issues():
     assert progress_bar(3, 8) == "████░░░░░░ 3/8"
     assert progress_bar(0, 0) == "░░░░░░░░░░ 0/0"
     assert progress_bar(5, 5) == "██████████ 5/5"
+
+
+def test_each_issues_status_is_resolved_once_per_call():
+    class Counting(StatusRules):
+        calls = 0
+
+        def repo_of(self, issue):
+            self.calls += 1
+            return super().repo_of(issue)
+
+    rules = Counting(CONFIG)
+    issues = [issue(1, "todo"), issue(2, "in-progress")]
+    visible_groups(issues, by_status(rules), rules, ViewState(focus="Todo"))
+    assert rules.calls <= 2 * len(issues)  # status_of asks repo_of twice

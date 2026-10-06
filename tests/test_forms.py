@@ -509,3 +509,62 @@ async def test_create_needs_a_title_and_works_from_the_detail():
         await settle(pilot)
         assert isinstance(app.screen, IssueDetailScreen)
         assert (await gateway.issue_detail("o/r", 3)).issue.title == "From the detail"
+
+
+class CountingDetails(FakeGitHub):
+    """Counts detail fetches."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.detail_fetches = 0
+
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+        self.detail_fetches += 1
+        return await super().issue_detail(repo, number)
+
+
+def counting() -> CountingDetails:
+    fake = github()
+    return CountingDetails(
+        viewer="me",
+        issues=fake.issues,
+        details=fake.details,
+        labels=fake.labels,
+        milestones=fake.milestones,
+        assignable=fake.assignable,
+    )
+
+
+async def test_assign_opens_without_a_detail_fetch_and_keeps_an_assignee_added_since_the_list():
+    gateway = counting()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        gateway.detail_fetches = 0
+
+        await pilot.press("a")
+        await settle(pilot)
+        assert gateway.detail_fetches == 0
+
+        # Meanwhile someone assigns sam on GitHub; I add kim.
+        gateway.issues[0] = replace(gateway.issues[0], assignees=("me", "sam"))
+        await type_text(pilot, "kim")
+        await pilot.press("tab", "space", "ctrl+s")
+        await settle(pilot)
+
+        assert (await gateway.issue_detail("o/r", 1)).issue.assignees == ("me", "sam", "kim")
+
+
+async def test_edit_opens_from_the_detail_cache_when_it_holds_the_issue():
+    gateway = counting()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        app.details["o/r#1"] = IssueDetail(issue(1, "todo", milestone="v1"), body="Cached body")
+        gateway.detail_fetches = 0
+
+        await pilot.press("e")
+        await settle(pilot)
+
+        assert gateway.detail_fetches == 0
+        assert app.screen.query_one("#body", TextArea).text == "Cached body"

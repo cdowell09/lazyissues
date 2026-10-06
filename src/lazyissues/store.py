@@ -1,5 +1,6 @@
 """The loaded issues, persisted as a snapshot so the next start is instant."""
 
+import asyncio
 import hashlib
 import json
 import math
@@ -21,6 +22,10 @@ SNAPSHOT_VERSION = 4
 # The clock reads are stamped with when requested, and moves with when confirmed:
 # monotonic, and fine-grained on Windows too.
 now = time.perf_counter
+
+# A burst of changes (a bulk move, a refresh of every tab) saves one snapshot this long
+# after the last of them.
+SAVE_DELAY = 0.3
 
 
 def cache_dir() -> Path:
@@ -52,6 +57,8 @@ class IssueStore:
         self.issues: list[Issue] = self._load()
         self.requested_at = -math.inf  # when the read behind `issues` was requested
         self._written: dict[str, float] = {}  # when each issue's latest write was sent
+        self._saving: asyncio.TimerHandle | None = None  # the pending save, if any
+        self._dirty = False  # changes the snapshot doesn't have yet
 
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
         """Await a read from GitHub and apply it, stamped with when it was requested."""
@@ -107,8 +114,26 @@ class IssueStore:
             return []
 
     def _save(self) -> None:
+        """Save the snapshot soon, once for a burst of changes. Without a running event
+        loop to wait on, save at once."""
         if self.path is None:
             return
+        self._dirty = True
+        if self._saving:
+            return
+        try:
+            self._saving = asyncio.get_running_loop().call_later(SAVE_DELAY, self.flush)
+        except RuntimeError:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write the snapshot now if a save is pending; call on exit."""
+        if self._saving:
+            self._saving.cancel()
+            self._saving = None
+        if self.path is None or not self._dirty:
+            return
+        self._dirty = False
         snapshot = {"version": SNAPSHOT_VERSION, "issues": [asdict(i) for i in self.issues]}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

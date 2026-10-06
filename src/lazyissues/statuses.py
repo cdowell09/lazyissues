@@ -47,6 +47,12 @@ class StatusRules:
             | {normalize(DONE): self._unknown + 1}
         )
         self._repos = {repo.name.casefold(): repo for repo in config.repos}
+        # Each issue's status, by identity (issues are frozen), since a redraw asks for
+        # it several times; `forget` empties it so it never outgrows one list's issues.
+        self._resolved: dict[int, tuple[Issue, IssueStatus]] = {}
+
+    def forget(self) -> None:
+        self._resolved.clear()
 
     def repo_of(self, issue: Issue) -> Repo:
         # A repo outside the repo set (a saved filter's own `repo:`) reads status labels.
@@ -59,6 +65,13 @@ class StatusRules:
         return [label for label in issue.labels if normalize(label) in self._statuses]
 
     def status_of(self, issue: Issue) -> IssueStatus:
+        if (hit := self._resolved.get(id(issue))) and hit[0] is issue:
+            return hit[1]
+        status = self._resolve(issue)
+        self._resolved[id(issue)] = (issue, status)
+        return status
+
+    def _resolve(self, issue: Issue) -> IssueStatus:
         if self.is_done(issue):
             return IssueStatus(DONE)
         repo = self.repo_of(issue)
