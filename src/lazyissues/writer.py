@@ -106,15 +106,12 @@ class Writer:
 
         self.app.push_screen(form, closed)
 
-    def _settled(self, written: Written) -> Written:
-        """`written` with the moves confirmed after it was sent applied (ADR 0003)."""
-        settled = self.moves.settle(written.detail.issue, written.sent_at)
-        return replace(written, detail=replace(written.detail, issue=settled))
-
     def _record(self, written: Written, *, cache: bool = True) -> Written:
         """Settle `written` and note it: when it was sent, and its detail in the cache
         (`cache` False leaves an uncached detail uncached)."""
-        written = self._settled(written)
+        # Apply the moves confirmed after it was sent (ADR 0003).
+        settled = self.moves.settle(written.detail.issue, written.sent_at)
+        written = replace(written, detail=replace(written.detail, issue=settled))
         key = written.detail.issue.key
         if cache:
             self.details[key] = written.detail
