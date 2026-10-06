@@ -26,6 +26,7 @@ from lazyissues.statuses import normalize
 
 API_URL = "https://api.github.com/graphql"
 SEARCH_LIMIT = 1000  # GitHub search never returns more than this
+MAX_RETRY_WAIT = 10  # seconds; a rate-limited read waits at most this long to retry
 LABEL_COLOR = "ededed"  # GitHub's gray, for a status label lazyissues creates
 
 
@@ -430,20 +431,23 @@ class GraphQLGateway:
         self._assignable: dict[str, list[str]] = {}
         self._viewer: tuple[str, set[str]] | None = None
 
-    async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
-        return (await self._send(query, **variables))[0]
+    async def _query(self, query: str, *, read: bool, **variables: Any) -> dict[str, Any]:
+        return (await self._send(query, read=read, **variables))[0]
 
-    async def _send(self, query: str, **variables: Any) -> tuple[dict[str, Any], httpx.Headers]:
+    async def _send(
+        self, query: str, *, read: bool, **variables: Any
+    ) -> tuple[dict[str, Any], httpx.Headers]:
         """The query's data, and the response headers.
 
-        A rate-limited search waits out `Retry-After` and goes again once; a mutation never
-        goes twice, as GitHub may have applied it.
+        A rate-limited read waits out a `Retry-After` of `MAX_RETRY_WAIT` seconds or less
+        and goes again once; a longer wait raises at once. A write (`read` False) never goes
+        twice, as GitHub may have applied it.
         """
         try:
             return await self._post(query, variables)
         except RateLimited as limit:
             wait = limit.retry_after
-            if wait is None or query.lstrip().startswith("mutation"):
+            if not read or wait is None or wait > MAX_RETRY_WAIT:
                 raise
         await self._sleep(wait)
         return await self._post(query, variables)
@@ -481,7 +485,7 @@ class GraphQLGateway:
         nodes: list[dict[str, Any]] = []
         after = None
         while len(nodes) < SEARCH_LIMIT:
-            page = connection(await self._query(query, after=after, **variables))
+            page = connection(await self._query(query, read=True, after=after, **variables))
             nodes += [node for node in page["nodes"] if node]
             if not page["pageInfo"]["hasNextPage"]:
                 break
@@ -496,13 +500,13 @@ class GraphQLGateway:
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
-        data = await self._query(_DETAIL, owner=owner, name=name, number=number)
+        data = await self._query(_DETAIL, read=True, owner=owner, name=name, number=number)
         return _detail(data["repository"]["issue"])
 
     async def whoami(self) -> tuple[str, set[str]]:
         """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
         if self._viewer is None:
-            data, headers = await self._send(_VIEWER)
+            data, headers = await self._send(_VIEWER, read=True)
             scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
             self._viewer = data["viewer"]["login"], scopes - {""}
         return self._viewer
@@ -513,7 +517,7 @@ class GraphQLGateway:
     async def repo_projects(self, repo: str) -> list[Project]:
         """The open projects linked to `repo`."""
         owner, name = repo.split("/")
-        data = await self._query(_PROJECTS, owner=owner, name=name)
+        data = await self._query(_PROJECTS, read=True, owner=owner, name=name)
         return [
             Project(
                 f"{_login(node['owner'])}/{node['number']}",
@@ -654,7 +658,7 @@ class GraphQLGateway:
 
     async def _user_id(self, login: str) -> str:
         if login not in self._user_ids:
-            user = (await self._query(_USER, login=login))["user"]
+            user = (await self._query(_USER, read=True, login=login))["user"]
             if user is None:
                 raise GitHubError(f"No GitHub user {login}.")
             self._user_ids[login] = user["id"]
@@ -698,7 +702,7 @@ class GraphQLGateway:
         """Run `mutation` with `fields` as its input, selecting `returning`."""
         kind = mutation[0].upper() + mutation[1:]
         query = f"mutation($input: {kind}Input!) {{ {mutation}(input: $input) {{ {returning} }} }}"
-        return (await self._query(query + fragments, input=fields))[mutation]
+        return (await self._query(query + fragments, read=False, input=fields))[mutation]
 
     async def _write(self, mutation: str, fields: dict[str, Any], issue: str) -> IssueDetail:
         """Run `mutation`, and build the issue's detail from its payload's `issue` field."""
@@ -758,9 +762,9 @@ class GraphQLGateway:
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
         """The issue's IDs and its live labels and project items (never cached)."""
         owner, name = repo.split("/", 1)
-        target = (await self._query(_WRITE_TARGET, owner=owner, name=name, number=number))[
-            "repository"
-        ]
+        target = (
+            await self._query(_WRITE_TARGET, read=True, owner=owner, name=name, number=number)
+        )["repository"]
         self._repo_ids[repo] = target["id"]
         self._issue_ids[repo, number] = target["issue"]["id"]
         return target
@@ -773,7 +777,7 @@ class GraphQLGateway:
     async def _repo_id(self, repo: str) -> str:
         if repo not in self._repo_ids:
             owner, name = repo.split("/", 1)
-            data = await self._query(_REPO_ID, owner=owner, name=name)
+            data = await self._query(_REPO_ID, read=True, owner=owner, name=name)
             self._repo_ids[repo] = data["repository"]["id"]
         return self._repo_ids[repo]
 
@@ -781,7 +785,7 @@ class GraphQLGateway:
         """The project "owner/number" with its Status field."""
         if project not in self._boards:
             login, number = project.split("/", 1)
-            data = await self._query(_PROJECT, login=login, number=int(number))
+            data = await self._query(_PROJECT, read=True, login=login, number=int(number))
             board = (data["repositoryOwner"] or {}).get("projectV2")
             if board is None:
                 raise GitHubError(f"Can't find project {project}.")

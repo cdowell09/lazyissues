@@ -92,3 +92,20 @@ async def test_a_mutation_never_retries():
         await gateway.reopen_issue("o/r", 5)
     assert len(sent) == 2  # the id lookup, then the mutation once
     assert slept == []
+
+
+async def test_a_wait_of_exactly_ten_seconds_is_retried():
+    gateway, sent, slept = serving(limited(429, **{"Retry-After": "10"}), ok())
+
+    assert await gateway.search_issues("x") == []
+    assert len(sent) == 2
+    assert slept == [10]
+
+
+async def test_a_wait_of_eleven_seconds_raises_at_once():
+    gateway, sent, slept = serving(limited(429, **{"Retry-After": "11"}), ok())
+
+    with pytest.raises(GitHubError, match="try again in 11 seconds"):
+        await gateway.search_issues("x")
+    assert len(sent) == 1
+    assert slept == []
