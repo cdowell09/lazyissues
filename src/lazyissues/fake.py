@@ -37,6 +37,7 @@ class FakeGitHub:
     # Open milestones' titles, by repo; their issue counts come from `issues`.
     milestones: dict[str, list[str]] = field(default_factory=dict)
     assignable: dict[str, list[str]] = field(default_factory=dict)  # assignable logins, by repo
+    searched: list[str] = field(default_factory=list)  # every search sent, in order
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -46,6 +47,7 @@ class FakeGitHub:
         }
 
     async def search_issues(self, query: str) -> list[Issue]:
+        self.searched.append(query)
         try:
             terms = shlex.split(query)
         except ValueError as e:  # an unclosed quote

@@ -7,7 +7,8 @@ drawing itself (indentation, fold arrows, tree lines) read them `drawn`.
 
 import re
 
-from textual.widgets import DataTable
+from textual.pilot import Pilot
+from textual.widgets import DataTable, TabbedContent
 
 from lazyissues.views.issue_list import FOLDED, UNFOLDED
 
@@ -23,3 +24,15 @@ def drawn(table: DataTable) -> list[str]:
 def plain(table: DataTable) -> list[str]:
     """Each row's Issue cell without its drawing."""
     return [DRAWING.sub("", text) for text in drawn(table)]
+
+
+async def show_tab(pilot: Pilot, view: str) -> None:
+    """Open the tab holding `view` and wait for its first refresh: tabs refresh when shown."""
+    await pilot.pause()  # the start tab has to be drawn before another is shown
+    pane = pilot.app.query_one(f"#{view}").parent
+    assert pane is not None and pane.id is not None
+    pilot.app.query_one(TabbedContent).active = pane.id
+    await pilot.pause()
+    await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()

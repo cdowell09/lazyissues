@@ -1,6 +1,6 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
-from listed import drawn, plain
+from listed import drawn, plain, show_tab
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
 
@@ -39,7 +39,7 @@ async def settled(pilot: Pilot) -> None:
 async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await settled(pilot)
+        await show_tab(pilot, "team")
         # Issues indent under their group; a fold arrow has a column of its own.
         assert drawn(table(app, "team")) == [
             "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
@@ -58,7 +58,7 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
 async def test_unassigned_lists_open_issues_without_an_assignee_by_status():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await settled(pilot)
+        await show_tab(pilot, "unassigned")
         assert firsts(app, "unassigned") == [
             "No status (1)",
             "tidepool#18",
@@ -128,7 +128,7 @@ async def test_r_refreshes_the_tab_on_screen():
         await open_tab(pilot, "unassigned")
         github.closed.add("octo-dev/tidepool#18")
         await pilot.press("r")
-        await settled(pilot)
+        await show_tab(pilot, "unassigned")
         assert firsts(app, "unassigned") == ["Todo (1)", "lanternfish#13"]
 
 
