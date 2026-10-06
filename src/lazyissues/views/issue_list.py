@@ -240,11 +240,14 @@ class IssueList(IssueActions, Widget):
         self.config = config
         self.rules = StatusRules(config)
         self.show()
-        if self._loaded:  # a tab not yet shown refreshes with the new config when it is
-            self.reload()
+        self.reload()
 
     def reload(self) -> None:
-        """Refresh from GitHub in the background; during a refresh, read again after it."""
+        """Refresh from GitHub in the background; during a refresh, read again after it.
+
+        A tab not yet shown only waits for its first show, which refreshes it."""
+        if not self._loaded:
+            return
         if self.refreshing:
             self._read_again = True
             return
@@ -272,7 +275,7 @@ class IssueList(IssueActions, Widget):
             self.error = None
         finally:
             self.refreshing = False
-        self.show()
+        self.redraw()
 
     async def _read(self, with_done: bool) -> list[Issue]:
         since = None

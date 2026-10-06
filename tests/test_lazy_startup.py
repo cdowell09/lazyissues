@@ -4,6 +4,8 @@ from textual.widgets import TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
+from lazyissues.views.team import Team
+from lazyissues.views.unassigned import Unassigned
 
 
 async def settle(pilot) -> None:
@@ -30,3 +32,48 @@ async def test_startup_searches_only_the_start_tab_and_a_tab_searches_once_when_
         tabs.active = "tab-3"
         await settle(pilot)
         assert github.searched == []
+
+
+async def test_a_reload_of_a_tab_never_shown_waits_for_its_first_show():
+    github = demo.github()
+    app = LazyIssuesApp(demo.config(), github)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        team = app.query_one(Team)
+        github.searched.clear()
+
+        team.reload()  # as a write that regroups does to every tab
+        await settle(pilot)
+        assert github.searched == []
+
+        app.query_one(TabbedContent).active = "tab-1"  # Team
+        await settle(pilot)
+        assert github.searched and len(github.searched) == len(set(github.searched))
+
+
+async def test_a_refresh_that_finishes_while_a_tab_is_hidden_redraws_it_when_shown(monkeypatch):
+    github = demo.github()
+    app = LazyIssuesApp(demo.config(), github)
+    async with app.run_test() as pilot:
+        tabs = app.query_one(TabbedContent)
+        tabs.active = "tab-3"  # Unassigned, loaded now
+        await settle(pilot)
+        tabs.active = "tab-0"
+        await settle(pilot)
+        unassigned = app.query_one(Unassigned)
+        drawn: list[None] = []
+        real_show = unassigned.show
+
+        def counting_show() -> None:
+            drawn.append(None)
+            real_show()
+
+        monkeypatch.setattr(unassigned, "show", counting_show)
+
+        unassigned.reload()
+        await settle(pilot)
+        assert drawn == []  # hidden: not drawn
+
+        tabs.active = "tab-3"
+        await settle(pilot)
+        assert len(drawn) == 1

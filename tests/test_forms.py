@@ -6,7 +6,7 @@ import subprocess
 import sys
 from dataclasses import replace
 
-from textual.widgets import DataTable, Input, Markdown, Select, Static, TextArea
+from textual.widgets import DataTable, Input, Markdown, Select, Static, TabbedContent, TextArea
 
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
@@ -138,6 +138,12 @@ async def test_a_comment_reloads_no_tab_and_an_assignment_reloads_the_others():
     gateway = recording()
     app = app_on(gateway)
     async with app.run_test() as pilot:
+        await settle(pilot)
+        tabs = app.query_one(TabbedContent)
+        for tab in ("tab-1", "tab-2", "tab-3", "tab-0"):  # tabs not yet shown wait to be
+            tabs.active = tab
+            await settle(pilot)
+        app.query_one("#my-work").query_one(DataTable).focus()
         await select_first_issue(pilot)
         gateway.searches.clear()
 
@@ -410,7 +416,9 @@ async def test_c_creates_an_issue_with_its_status_label_in_a_label_backed_repo()
         assert (created.issue.labels, created.issue.milestone) == (("doing",), "v2")
         cached = app.details["o/r#3"]
         assert (cached.body, cached.issue.milestone) == ("Body text", "v2")
-        # Unassigned lists new issues, so it reloads to show this one.
+        # Unassigned lists new issues, so it shows this one when first opened.
+        app.query_one(TabbedContent).active = "tab-3"
+        await settle(pilot)
         assert "o/r#3" in [i.key for i in app.query_one("#unassigned", IssueList).store.issues]
 
 
