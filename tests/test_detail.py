@@ -260,7 +260,7 @@ async def test_a_change_to_another_issue_leaves_the_detail_alone():
         await open_detail(pilot)
         before = detail_children(app)
 
-        app.mover.changed.publish(issue(3, "todo"))
+        app.mover.changed.publish([issue(3, "todo")])
         await pilot.pause()
 
         assert detail_children(app) == before

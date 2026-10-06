@@ -10,6 +10,7 @@ from lazyissues.models import Event, Issue, Milestone, Project, ProjectField
 
 def node(number: int) -> dict:
     return {
+        "id": f"I_{number}",
         "number": number,
         "title": f"Issue {number}",
         "url": f"https://github.com/o/r/issues/{number}",

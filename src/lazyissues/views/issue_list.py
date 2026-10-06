@@ -430,16 +430,18 @@ class IssueList(IssueActions, Widget):
         if issue.key in table.rows:
             table.move_cursor(row=table.get_row_index(issue.key))
 
-    def _on_moved(self, moved: Issue) -> None:
-        if any(issue.key == moved.key for issue in self.store.issues):
+    def _on_moved(self, moved: Sequence[Issue]) -> None:
+        keys = {issue.key for issue in moved}
+        if any(issue.key in keys for issue in self.store.issues):
             self.store.apply_moves()
             self.redraw()
 
-    def _on_written(self, written: Written) -> None:
-        if self.store.update(written.detail.issue, written.sent_at):
+    def _on_written(self, writes: Sequence[Written]) -> None:
+        shown = [self.store.update(w.detail.issue, w.sent_at) for w in writes]
+        if any(shown):
             self.redraw()
-        elif written.regroups:  # only this tab's search knows whether it belongs here now
-            self.reload()
+        if any(w.regroups and not on for w, on in zip(writes, shown, strict=True)):
+            self.reload()  # only this tab's search knows whether an issue belongs here now
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""

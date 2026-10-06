@@ -80,7 +80,7 @@ class Mover:
         self.details = details
         # Publishes an issue as it is now, whenever a move of it starts or ends. Each view
         # then applies confirmed moves to its store (`IssueStore.apply_moves`) and redraws.
-        self.changed: Signal[Issue] = Signal(app, "moved")
+        self.changed: Signal[Sequence[Issue]] = Signal(app, "moved")
         self._viewer: str | None = None
         self._options: dict[str, list[str]] = {}  # each project's Status options
 
@@ -136,15 +136,19 @@ class Mover:
         if not self.moves.start(issue, target.label):  # one move per issue at a time
             self._still_moving(issue)
             return
-        if rejected := await self._send_started(issue, plan):
+        self.changed.publish([issue])  # shows as pending
+        rejected, moved = await self._send_started(issue, plan)
+        self.changed.publish([moved])
+        if rejected:
             self.app.push_screen(
                 RejectedMoveBanner(rejected), lambda _: self.moves.dismiss(rejected)
             )
 
     async def send_each(self, outcomes: Sequence[Outcome], label: str) -> list[Outcome]:
         """Make a bulk move, `label`, of each issue `outcomes` plans for, with GitHub's
-        error on each it refuses. Every move starts at once, so each shows as pending, then
-        they go one by one. An issue with a move in flight is skipped."""
+        error on each it refuses. Every move starts at once, so each shows as pending, then they
+        go one by one; the lists redraw when they start and once more at the end. An issue
+        with a move in flight is skipped."""
         started = [
             outcome
             if isinstance(outcome.plan, Skip) or self.moves.start(outcome.issue, label)
@@ -153,32 +157,34 @@ class Mover:
             )
             for outcome in outcomes
         ]
+        self.changed.publish([o.issue for o in started if not isinstance(o.plan, Skip)])
         done = []
+        changed = []
         for outcome in started:
             plan = outcome.plan
-            if not isinstance(plan, Skip) and (
-                rejected := await self._send_started(outcome.issue, plan)
-            ):
-                self.moves.dismiss(rejected)  # the bulk summary lists it, not a banner each
-                outcome = replace(outcome, error=rejected.error)
+            if not isinstance(plan, Skip):
+                rejected, moved = await self._send_started(outcome.issue, plan)
+                changed.append(moved)
+                if rejected:
+                    self.moves.dismiss(rejected)  # the bulk summary lists it, not a banner each
+                    outcome = replace(outcome, error=rejected.error)
             done.append(outcome)
+        self.changed.publish(changed)  # one redraw for all of them
         return done
 
-    async def _send_started(self, issue: Issue, plan: list[Step]) -> Rejected | None:
+    async def _send_started(self, issue: Issue, plan: list[Step]) -> tuple[Rejected | None, Issue]:
         """Send `plan`, the move of `issue` the tracker `start`ed, and settle it: confirmed,
-        or rejected and kept in the tracker until dismissed (returned, to show)."""
-        self.changed.publish(issue)
+        or rejected and kept in the tracker until dismissed (returned, to show). Also
+        returns the issue to show."""
         try:
             await send(self.github, issue, plan)
         except GitHubError as e:
             self.moves.reject(issue.key, str(e))
-            self.changed.publish(issue)
-            return self.moves.rejected[-1]
+            return self.moves.rejected[-1], issue
         self.moves.confirm(issue.key, plan, now())
         if detail := self.details.get(issue.key):
             self.details[issue.key] = replace(detail, issue=apply(plan, detail.issue))
-        self.changed.publish(apply(plan, issue))
-        return None
+        return None, apply(plan, issue)
 
     def _still_moving(self, issue: Issue) -> None:
         pending = self.moves.pending(issue.key)

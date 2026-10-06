@@ -1,5 +1,6 @@
 """Selecting issues in a list and acting on them all at once, against the fake GitHub."""
 
+import asyncio
 from collections.abc import Callable
 
 from listed import plain
@@ -8,7 +9,7 @@ from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, Static, TabbedContent
 from textual.widgets.data_table import RowKey
 
-from lazyissues import demo
+from lazyissues import demo, mover
 from lazyissues.app import LazyIssuesApp
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.keys import KeysScreen
@@ -171,10 +172,12 @@ def options(app: App) -> list[str]:
 
 
 async def choose(pilot: Pilot, prompt: str) -> None:
-    """Take the option of the open bulk menu that reads `prompt`."""
+    """Take the option of the open bulk menu that reads `prompt`, or starts with it."""
     await until(pilot, lambda: isinstance(pilot.app.screen, BulkMenu))
-    await until(pilot, lambda: prompt in options(pilot.app))
-    pilot.app.screen.query_one(OptionList).highlighted = options(pilot.app).index(prompt)
+    await until(pilot, lambda: any(o.startswith(prompt) for o in options(pilot.app)))
+    shown = options(pilot.app)
+    choice = prompt if prompt in shown else next(o for o in shown if o.startswith(prompt))
+    pilot.app.screen.query_one(OptionList).highlighted = shown.index(choice)
     await pilot.press("enter")
 
 
@@ -340,3 +343,71 @@ async def test_selecting_updates_checkboxes_in_place_and_keeps_the_cursor(monkey
         assert rebuilds == []
         filters = app.query_one("#my-work #filters", Static)
         assert str(filters.render()) == "selected: 1"
+
+
+async def redraws_during_bulk(pilot: Pilot, monkeypatch, *prompts: str) -> int:
+    """Press A, B, take each of `prompts`, confirm, and count the list rebuilds until the
+    summary shows in the my-work list."""
+    rebuilds: list[None] = []
+    clear = IssueTable.clear
+
+    def counting(table: IssueTable, *args, **kwargs):
+        if table.parent and table.parent.id == "my-work":  # the tab in view
+            rebuilds.append(None)
+        return clear(table, *args, **kwargs)
+
+    monkeypatch.setattr(IssueTable, "clear", counting)
+    await ready(pilot)
+    await pilot.press("A", "B")
+    for prompt in prompts:
+        await choose(pilot, prompt)
+    await until(pilot, lambda: isinstance(pilot.app.screen, BulkConfirm))
+    rebuilds.clear()
+    await pilot.press("enter")
+    await until(pilot, lambda: isinstance(pilot.app.screen, BulkSummary))
+    return len(rebuilds)
+
+
+async def test_a_bulk_move_redraws_each_list_when_it_starts_and_when_it_ends(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        moved = await redraws_during_bulk(
+            pilot, monkeypatch, "Move", "Move to In Progress  (3 of 5 can)"
+        )
+        assert moved == 2
+        assert report(app)[0] == "Done (3)"
+
+
+async def test_a_bulk_assign_redraws_each_list_once(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        assigned = await redraws_during_bulk(pilot, monkeypatch, "Assign", "Assign to sam-reef")
+        assert assigned == 1
+        assert report(app)[0].startswith("Done (")
+
+
+async def test_a_bulk_move_shows_every_issue_pending_while_it_runs(monkeypatch):
+    release = asyncio.Event()
+    send = mover.send
+
+    async def slow(*args, **kwargs):
+        await release.wait()
+        return await send(*args, **kwargs)
+
+    monkeypatch.setattr(mover, "send", slow)
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        await pilot.press("A", "B")
+        await choose(pilot, "Move")
+        await choose(pilot, "Move to In Progress")
+        await until(pilot, lambda: isinstance(app.screen, BulkConfirm))
+        await pilot.press("enter")
+
+        moving = (TIDE_15, LANTERN_9, LANTERN_11)
+        await until(pilot, lambda: all(app.moves.pending(key) for key in moving))
+        await until(pilot, lambda: all("⋯" in str(table(app).get_row(k)) for k in moving))
+        release.set()
+        await until(pilot, lambda: isinstance(app.screen, BulkSummary))
+        assert not any(app.moves.pending(key) for key in moving)

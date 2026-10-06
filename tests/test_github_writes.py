@@ -52,6 +52,8 @@ class GitHub:
             assert kind == name[0].upper() + name[1:]
             self.mutations.append((name, variables["input"]))
             payload = {"label": {"id": "L-new"}} if name == "createLabel" else {}
+            if name == "addAssigneesToAssignable":
+                payload = {"assignable": issue_node(1)}
             return httpx.Response(200, json={"data": {name: payload}})
         self.lookups.append(variables)
         if "repositoryOwner" in query:
@@ -236,3 +238,50 @@ async def test_a_board_is_fetched_once(gateway, github):
     await gateway.add_to_project("o/r", 1, "o/1")
 
     assert sum("number" in lookup and "login" in lookup for lookup in github.lookups) == 1
+
+
+def issue_node(number: int) -> dict[str, Any]:
+    return {
+        "id": f"I_{number}",
+        "number": number,
+        "title": f"Issue {number}",
+        "url": f"https://github.com/o/r/issues/{number}",
+        "repository": {"nameWithOwner": "o/r"},
+        "assignees": {"nodes": [{"login": "sam"}]},
+        "labels": {"nodes": []},
+        "state": "OPEN",
+        "closedAt": None,
+        "milestone": None,
+        "parent": None,
+        "projectItems": {"nodes": []},
+    }
+
+
+async def test_a_bulk_assign_sends_one_lean_request_per_issue():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        query = body["query"]
+        if "user(login" in query:
+            return httpx.Response(200, json={"data": {"user": {"id": "U1"}}})
+        if query.lstrip().startswith("mutation"):
+            number = int(body["variables"]["input"]["assignableId"][2:])
+            payload = {"assignable": issue_node(number)}
+            return httpx.Response(200, json={"data": {"addAssigneesToAssignable": payload}})
+        nodes = [issue_node(n) for n in range(1, 51)]
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    gateway = GraphQLGateway("token", transport=httpx.MockTransport(handler))
+    issues = await gateway.search_issues("is:open")
+    sent.clear()
+
+    assigned = [await gateway.assign(i.repo, i.number, "sam") for i in issues]
+
+    mutations = [b for b in sent if b["query"].lstrip().startswith("mutation")]
+    assert len(sent) == 51  # 50 mutations and one user lookup
+    assert all("DetailFields" not in b["query"] for b in mutations)
+    assert [i.number for i in assigned] == list(range(1, 51))
+    assert assigned[0].assignees == ("sam",)

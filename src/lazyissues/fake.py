@@ -177,11 +177,12 @@ class FakeGitHub:
         self.closed.discard(self.issues[index].key)
         self.issues[index] = replace(self.issues[index], closed_at=None)
 
-    async def assign(self, repo: str, number: int, login: str) -> None:
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
         index = self._writable(repo, number)
         issue = self.issues[index]
         if login not in issue.assignees:
             self.issues[index] = replace(issue, assignees=(*issue.assignees, login))
+        return self._current(self.issues[index])
 
     def _index(self, repo: str, number: int) -> int:
         for index, issue in enumerate(self.issues):
