@@ -13,7 +13,7 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.keys import KeysScreen
 from lazyissues.mover import RejectedMoveBanner
-from lazyissues.views.issue_list import IssueList
+from lazyissues.views.issue_list import IssueList, IssueTable
 
 TIDE_12 = "octo-dev/tidepool#12"  # In Progress, from the `in-progress` label
 TIDE_15 = "octo-dev/tidepool#15"  # In Review (two status labels)
@@ -324,3 +324,19 @@ async def test_cancelling_the_confirmation_changes_nothing():
         await ready(pilot)
         assert TIDE_12 in groups(app)["In Progress"]
         assert checked(app) == {TIDE_12}
+
+
+async def test_selecting_updates_checkboxes_in_place_and_keeps_the_cursor(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await cursor_to(pilot, TIDE_15)
+        rebuilds: list[None] = []
+        clear = IssueTable.clear
+        monkeypatch.setattr(IssueTable, "clear", lambda *a, **k: rebuilds.append(clear(*a, **k)))
+        for key in ("space", "A", "u", "space"):
+            await pilot.press(key)
+        assert checked(app) == {TIDE_15}
+        assert table(app).cursor_row == table(app).get_row_index(TIDE_15)
+        assert rebuilds == []
+        filters = app.query_one("#my-work #filters", Static)
+        assert str(filters.render()) == "selected: 1"
