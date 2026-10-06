@@ -201,7 +201,7 @@ class IssueList(IssueActions, Widget):
         self.mover.changed.subscribe(self, self._on_moved)
         self.writer.changed.subscribe(self, self._on_written)
         if self.store.issues:
-            self.show()
+            self.redraw()
 
     def on_show(self) -> None:
         if not self._loaded:  # the first refresh waits until the tab is shown
@@ -239,7 +239,7 @@ class IssueList(IssueActions, Widget):
             self.set_reactive(IssueList.state, replace(self.state, show_done=show_done))
         self.config = config
         self.rules = StatusRules(config)
-        self.show()
+        self.redraw()
         self.reload()
 
     def reload(self) -> None:

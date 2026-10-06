@@ -77,3 +77,25 @@ async def test_a_refresh_that_finishes_while_a_tab_is_hidden_redraws_it_when_sho
         tabs.active = "tab-3"
         await settle(pilot)
         assert len(drawn) == 1
+
+
+async def test_applying_a_config_to_a_hidden_tab_redraws_it_only_when_shown(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        team = app.query_one(Team)  # never shown
+        drawn: list[None] = []
+        real_show = team.show
+
+        def counting_show() -> None:
+            drawn.append(None)
+            real_show()
+
+        monkeypatch.setattr(team, "show", counting_show)
+
+        team.configure(app.config)
+        assert drawn == []
+
+        app.query_one(TabbedContent).active = "tab-1"
+        await settle(pilot)
+        assert len(drawn) == 2  # the pending redraw, then the first refresh's result
