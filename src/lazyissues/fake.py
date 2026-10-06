@@ -239,7 +239,7 @@ class FakeGitHub:
     async def repo_projects(self, repo: str) -> list[Project]:
         return self.projects.get(self._resolve(repo), [])
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
         repo = self._resolve(repo)
         milestones = []
         for title in self.milestones.get(repo, []):

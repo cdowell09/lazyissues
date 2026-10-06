@@ -11,13 +11,21 @@ from lazyissues.statuses import StatusRules
 
 
 class EditForm(Form):
-    """Starts from GitHub's latest copy and sends only what changed: the changed fields,
-    and the labels added and removed. So an edit made elsewhere meanwhile is kept, and
-    status labels, which only a move changes, are never offered or touched."""
+    """Starts from the cached detail (GitHub's copy when there is none) and sends only what
+    changed: the changed fields, and the labels added and removed. So an edit made elsewhere
+    meanwhile is kept, and status labels, which only a move changes, are never offered or
+    touched."""
 
-    def __init__(self, github: Gateway, issue: Issue, rules: StatusRules) -> None:
+    def __init__(
+        self,
+        github: Gateway,
+        issue: Issue,
+        rules: StatusRules,
+        details: dict[str, IssueDetail],
+    ) -> None:
         super().__init__(github, f"Edit {issue.ref}")
         self.issue = issue
+        self.details = details  # the app's detail cache
         self.rules = rules
         self.before: IssueDetail | None = None  # GitHub's copy when the form opened
 
@@ -25,9 +33,9 @@ class EditForm(Form):
         yield IssueFields()
 
     async def load(self) -> None:
-        repo, number = self.issue.repo, self.issue.number
+        repo = self.issue.repo
         before, labels, milestones = await asyncio.gather(
-            self.github.issue_detail(repo, number),
+            self._detail(),
             self.github.repo_labels(repo),
             self.github.repo_milestones(repo),
         )
@@ -40,6 +48,11 @@ class EditForm(Form):
             milestone=before.issue.milestone,
         )
         self.before = before
+
+    async def _detail(self) -> IssueDetail:
+        return self.details.get(self.issue.key) or await self.github.issue_detail(
+            self.issue.repo, self.issue.number
+        )
 
     def _ordinary(self, labels: tuple[str, ...] | list[str]) -> list[str]:
         return self.rules.ordinary_labels(self.rules.repo_of(self.issue), labels)

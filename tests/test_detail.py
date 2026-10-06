@@ -217,3 +217,64 @@ async def test_a_failed_fetch_is_reported_and_the_detail_stays_open():
         assert isinstance(app.screen, IssueDetailScreen)
         assert "Issue 4" in text(app)
         assert "Couldn't load r#4" in text(app)
+
+
+def long_thread() -> FakeGitHub:
+    fake = github()
+    for number in (1, 2):
+        events = tuple(Event("sam", AT, "commented", f"#{number} comment {n}") for n in range(60))
+        fake.details[f"o/r#{number}"] = IssueDetail(issue(number), body="Body", activity=events)
+    return fake
+
+
+async def test_a_long_thread_fills_in_completely_and_keeps_links():
+    app = app_on(long_thread())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        sources = markdown(app)
+        assert sources == ["Body", *(f"#1 comment {n}" for n in range(60))]
+        assert len(app.screen.query(Markdown)) == 61
+
+
+async def test_stepping_mid_fill_shows_only_the_new_issue():
+    app = app_on(long_thread())
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter", "right")  # no waiting for the fill
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert markdown(app) == ["Body", *(f"#2 comment {n}" for n in range(60))]
+
+
+def detail_children(app: LazyIssuesApp) -> list:
+    return list(app.screen.query_one("#detail").children)
+
+
+async def test_a_change_to_another_issue_leaves_the_detail_alone():
+    app = app_on(github())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        before = detail_children(app)
+
+        app.mover.changed.publish([issue(3, "todo")])
+        await pilot.pause()
+
+        assert detail_children(app) == before
+
+
+async def test_a_refetch_that_finds_nothing_new_leaves_the_detail_alone():
+    app = app_on(github())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        before = detail_children(app)
+
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+        await screen.fetch(screen.issue)
+        await pilot.pause()
+
+        assert detail_children(app) == before

@@ -31,7 +31,9 @@ class Milestones(IssueList):
 
     async def queries(self) -> list[str]:
         repos = self.config.repo_names
-        found = await asyncio.gather(*(self.github.repo_milestones(repo) for repo in repos))
+        found = await asyncio.gather(
+            *(self.github.repo_milestones(repo, fresh=True) for repo in repos)
+        )
         self.found = [milestone for milestones in found for milestone in milestones]
         return [f'is:issue repo:{m.repo} milestone:"{m.title}"' for m in self.milestones]
 

@@ -59,7 +59,9 @@ class Gateway(Protocol):
 
     async def repo_projects(self, repo: str) -> list[Project]: ...
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]: ...
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """`fresh` skips any cache, for counts that must be current."""
+        ...
 
     async def assignable_users(self, repo: str) -> list[str]: ...
 
@@ -424,6 +426,8 @@ class GraphQLGateway:
         self._user_ids: dict[str, str] = {}
         self._label_nodes: dict[str, list[dict[str, Any]]] = {}
         self._boards: dict[str, dict[str, Any]] = {}
+        self._milestone_nodes: dict[str, list[dict[str, Any]]] = {}
+        self._assignable: dict[str, list[str]] = {}
         self._viewer: tuple[str, set[str]] | None = None
 
     async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
@@ -520,11 +524,12 @@ class GraphQLGateway:
             if node and not node["closed"]
         ]
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
-        """`repo`'s open milestones, soonest due first, with their issue counts."""
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """`repo`'s open milestones, soonest due first, with their issue counts (as of the
+        last read, unless `fresh`)."""
         return [
             Milestone(repo, node["title"], node["open"]["totalCount"], node["closed"]["totalCount"])
-            for node in await self._milestones(repo)
+            for node in await self._milestones(repo, fresh)
         ]
 
     async def project_status_options(self, project: str) -> list[str]:
@@ -594,14 +599,16 @@ class GraphQLGateway:
         await self._mutate("reopenIssue", {"issueId": await self._issue_id(repo, number)})
 
     async def assignable_users(self, repo: str) -> list[str]:
-        owner, name = repo.split("/", 1)
-        users = await self._nodes(
-            _ASSIGNABLE_USERS,
-            lambda d: d["repository"]["assignableUsers"],
-            owner=owner,
-            name=name,
-        )
-        return [user["login"] for user in users]
+        if repo not in self._assignable:
+            owner, name = repo.split("/", 1)
+            users = await self._nodes(
+                _ASSIGNABLE_USERS,
+                lambda d: d["repository"]["assignableUsers"],
+                owner=owner,
+                name=name,
+            )
+            self._assignable[repo] = [user["login"] for user in users]
+        return self._assignable[repo]
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         fields = {"subjectId": await self._issue_id(repo, number), "body": body}
@@ -703,12 +710,14 @@ class GraphQLGateway:
             )
         return self._label_nodes[repo]
 
-    async def _milestones(self, repo: str) -> list[dict[str, Any]]:
+    async def _milestones(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
         """Every open milestone of `repo`, soonest due first, with its ID."""
-        owner, name = repo.split("/", 1)
-        return await self._nodes(
-            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
-        )
+        if fresh or repo not in self._milestone_nodes:
+            owner, name = repo.split("/", 1)
+            self._milestone_nodes[repo] = await self._nodes(
+                _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
+            )
+        return self._milestone_nodes[repo]
 
     async def _label_ids(self, repo: str, labels: Sequence[str]) -> list[str]:
         if not labels:
@@ -720,6 +729,8 @@ class GraphQLGateway:
         if milestone is None:
             return None
         ids = {m["title"]: m["id"] for m in await self._milestones(repo)}
+        if milestone not in ids:  # made on GitHub since we read them
+            ids = {m["title"]: m["id"] for m in await self._milestones(repo, fresh=True)}
         return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
