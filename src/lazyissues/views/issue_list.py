@@ -167,6 +167,7 @@ class IssueList(IssueActions, Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.writer = writer  # the app's, shared by every view
+        self._loaded = False  # the first refresh has started
         self._read_again = False  # a reload was asked for during a refresh
         self._search_timer: Timer | None = None  # filters once typing pauses
         self.rules = StatusRules(config)
@@ -201,9 +202,11 @@ class IssueList(IssueActions, Widget):
         self.writer.changed.subscribe(self, self._on_written)
         if self.store.issues:
             self.show()
-        self.reload()
 
     def on_show(self) -> None:
+        if not self._loaded:  # the first refresh waits until the tab is shown
+            self._loaded = True
+            self.reload()
         if self._stale:
             self.show()
 
@@ -237,7 +240,8 @@ class IssueList(IssueActions, Widget):
         self.config = config
         self.rules = StatusRules(config)
         self.show()
-        self.reload()
+        if self._loaded:  # a tab not yet shown refreshes with the new config when it is
+            self.reload()
 
     def reload(self) -> None:
         """Refresh from GitHub in the background; during a refresh, read again after it."""
