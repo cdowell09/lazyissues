@@ -94,8 +94,7 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     return widgets
 
 
-_FIRST_SCREEN = 8  # Markdown blocks drawn at once; about a screenful
-_BATCH = 8
+_FIRST_SCREEN = 8  # Markdown blocks drawn at once, and in each batch after; a screenful
 _PAUSE = 0.1
 
 
@@ -230,11 +229,11 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
 
         Markdown costs ~15ms a block to mount, so the rest comes in batches that
         redrawing, stepping or closing cancels."""
-        for start in range(0, len(widgets), _BATCH):
+        for start in range(0, len(widgets), _FIRST_SCREEN):
             await asyncio.sleep(_PAUSE)  # lets the screen paint
             if draw != self._draws:
                 return
-            await content.mount_all(widgets[start : start + _BATCH])
+            await content.mount_all(widgets[start : start + _FIRST_SCREEN])
 
     async def fetch(self, issue: Issue) -> None:
         # Stepping starts a new fetch in this exclusive group, cancelling this one.

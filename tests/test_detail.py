@@ -3,11 +3,12 @@ import webbrowser
 from dataclasses import replace
 from datetime import UTC, datetime
 
+from textual.widget import Widget
 from textual.widgets import DataTable, Markdown, Static
 
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
-from lazyissues.detail import IssueDetailScreen
+from lazyissues.detail import _FIRST_SCREEN, IssueDetailScreen, _first_screen
 from lazyissues.fake import FakeGitHub
 from lazyissues.models import Event, Issue, IssueDetail, ProjectField
 
@@ -275,6 +276,14 @@ async def test_stepping_from_a_long_issue_to_a_short_one_within_a_frame_adds_not
         await pilot.pause(0.5)  # longer than the fill's pauses
 
         assert markdown(app) == ["Short", "Only comment"]
+
+
+def test_exactly_a_first_screen_of_markdown_blocks_is_mounted_at_once_and_one_more_is_deferred():
+    assert _FIRST_SCREEN == 8
+    blocks: list[Widget] = [Markdown(f"block {n}") for n in range(9)]
+
+    assert _first_screen(blocks[:8]) == (blocks[:8], [])
+    assert _first_screen(blocks) == (blocks[:8], blocks[8:])
 
 
 def detail_children(app: LazyIssuesApp) -> list:
