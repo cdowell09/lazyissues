@@ -61,7 +61,8 @@ class Gateway(Protocol):
     async def repo_projects(self, repo: str) -> list[Project]: ...
 
     async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
-        """`fresh` skips any cache, for counts that must be current."""
+        """The open milestones; their counts are as of the session's last read unless `fresh`,
+        which skips any cache for counts that must be current."""
         ...
 
     async def assignable_users(self, repo: str) -> list[str]: ...
@@ -70,7 +71,8 @@ class Gateway(Protocol):
         """The Status field's options of project "owner/number", in board order."""
         ...
 
-    # Writes. Each issue is `repo` ("owner/name") and `number`.
+    # Writes. Each issue is `repo` ("owner/name") and `number`. They return nothing, except
+    # `assign`, which returns the issue, and the ones below it, which return its detail.
 
     async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         """Add, in one request, the repo's labels matching `names` as statuses match, creating
@@ -98,7 +100,6 @@ class Gateway(Protocol):
         ...
 
     # These writes return the issue's detail as GitHub has it once the write is done.
-
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail: ...
 
     async def change_assignees(
@@ -555,6 +556,7 @@ class GraphQLGateway:
                 created = (await self._mutate("createLabel", label_input, "label { id }"))["label"]
                 label = {"id": created["id"], "name": name}
                 labels.append(label)
+                self._label_nodes[repo].append(label)  # the next move finds it
             ids.append(label["id"])
         await self._mutate("addLabelsToLabelable", {"labelableId": issue_id, "labelIds": ids})
 
@@ -616,7 +618,7 @@ class GraphQLGateway:
                 name=name,
             )
             self._assignable[repo] = [user["login"] for user in users]
-        return self._assignable[repo]
+        return list(self._assignable[repo])
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         fields = {"subjectId": await self._issue_id(repo, number), "body": body}
@@ -710,13 +712,13 @@ class GraphQLGateway:
         return _detail((await self._mutate(mutation, fields, returning, _DETAIL_FIELDS))[issue])
 
     async def _labels(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
-        """Every label of `repo`, with its ID; `add_labels` keeps the list current."""
+        """A copy of every label of `repo`, with its ID; `add_labels` keeps the cache current."""
         if fresh or repo not in self._label_nodes:
             owner, name = repo.split("/")
             self._label_nodes[repo] = await self._nodes(
                 _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
             )
-        return self._label_nodes[repo]
+        return list(self._label_nodes[repo])
 
     async def _read_again_on_miss(
         self,
