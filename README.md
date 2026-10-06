@@ -70,7 +70,7 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | --- | --- | --- |
 | `↑` `↓` | lists | select an issue |
 | `Enter` | lists | open the issue detail |
-| `/` | lists | search by number, title, assignee or label (and team member in Team); `Enter` keeps it, `Esc` clears it |
+| `/` | lists | search by number, title, assignee or label (and team member in Team); the list filters after a short pause in typing; `Enter` keeps it, `Esc` clears it |
 | `f` `F` | lists | focus the next or previous status, then back to all |
 | `d` | lists | show or hide done issues, loading those closed within `done_window_days` |
 | `z` `Z` | lists | fold the sub-issues of the parent under the cursor (or of the sub-issue's parent), else the group; or fold and unfold every group |
@@ -149,13 +149,17 @@ Before anything is sent, a confirmation lists the issues that will change and th
 
 - **Assign** lists your team roster first, then everyone the repo can assign; type to filter, `Space` to pick. Only the people you add or remove change.
 - **Create** starts in the repo you last created in, else the selected issue's. Its status is set as a move once the issue exists: the status label in a label-backed repo, or the project's Status in a project-backed one. If GitHub rejects that, the issue is still created and the rejected move stays on screen.
-- **Edit** starts from GitHub's latest copy and sends only the fields you changed.
+- **Edit** starts from the issue's cached detail when there is one (else GitHub's copy) and sends only the fields you changed, so edits made elsewhere meanwhile are kept.
 
 If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
 
 ## Cache
 
-The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. Deleting it is always safe.
+The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup only the tab you start on refreshes; each other tab refreshes the first time you open it. Deleting it is always safe.
+
+## Rate limits
+
+If GitHub's rate limit is reached, lazyissues says so and when to try again. A read that is told to wait 10 seconds or less (a refresh, a detail) waits and tries once more; a longer wait shows the message at once. A write is never retried, since GitHub may have applied it.
 
 ## Install
 
