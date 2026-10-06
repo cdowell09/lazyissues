@@ -74,15 +74,41 @@ Everything above the gateway depends on the `Gateway` protocol, never on GraphQL
 
 `README.md` is the onboarding doc for install, setup and keybindings; update it with any user-facing change.
 
-## Before a PR lands
+## Coding standards
 
-Run all three reviews against the PR's diff, rank every finding P0–P3, and fix every P0–P2 before merging:
+Reviewers apply these rules to every change; `code-review` reads them for its Standards axis. The rules are judgement calls unless they say otherwise.
 
-- `/ponytail:ponytail-review`: over-engineering
-- `/pragmatic-programmer`: craftsmanship (DRY, orthogonality, contracts)
-- `/thermo-nuclear-code-quality-review`: structure and maintainability
+### Required reviews
 
-P0 breaks behavior or loses data, P1 is a bug or structural regression, P2 is a maintainability problem worth fixing now, P3 is a nit. List the P3s you left in the PR description.
+Code quality and architecture are release requirements. Before raising any PR, run all four reviews: `ponytail:ponytail-review`, `code-review` (both Standards and Spec), `thermo-nuclear-code-quality-review`, and `pragmatic-programmer`. Address every P0, P1 and P2 finding and re-review the affected changes before opening the PR. These reviews are mandatory for every PR.
+
+P0 breaks behavior or loses data, P1 is a bug or structural regression, P2 is a maintainability problem worth fixing now, P3 is a nit.
+
+### Promised bounds have boundary tests
+
+When a docstring, comment or ADR promises a limit, a unit, or what is retained, a test exercises the exact boundary and asserts the exact value. An inequality does not prove what was kept.
+
+For example, "output beyond 1,000 bytes is truncated and the prefix is kept for evidence" needs a test at exactly 1,000 bytes (kept whole) and one at 1,001 (the result equals the first 1,000). `assert len(output) <= 1000` passes even when the prefix is dropped. Test the promised unit too: a byte limit needs multi-byte input, and chunked reading needs a character split across chunks.
+
+### PR bodies
+
+PR bodies follow the repository's PR template (Summary, Evidence, Merge Danger) plus a short Reviews section with evidence that the four required reviews ran: findings by severity, what was fixed, and what was skipped and why. Keep long review logs and decision tables in the plan or ticket.
+
+When the Summary is a file tree, list only the changed files in a `diff` block so GitHub colors each line by status:
+
+```diff
++ src/new_module.py        NEW
+- src/old_module.py        REMOVED
+! src/parser.py            invalid input → ParseError
+- src/loader.py            RENAMED ↓
++ src/config_loader.py
+```
+
+Keep each note to a few words; put anything longer below the tree.
+
+### After opening a PR
+
+Follow the PR's GitHub Actions checks with `gh pr checks <pr> --watch`, not the aggregate status badge, until they pass, and fix any failure. Read every Copilot review comment: fix the ones that hold, and reply to each with the fixing commit or why no change is needed. Re-run the affected reviews after any fix. Don't merge; the user does. When the user authorizes a merge, merge only after that command exits 0 and the GitHub Actions workflows for the previous merge commit on the default branch have passed (`gh run list --commit <sha>`, then `gh run watch <run-id> --exit-status`).
 
 ## Commit Messages
 Follow @COMMIT_STYLING.md
