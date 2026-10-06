@@ -67,7 +67,7 @@ class Writer:
         self._open(AssignForm(self.github, issue, self.config.team))
 
     def edit(self, issue: Issue) -> None:
-        self._open(EditForm(self.github, issue, StatusRules(self.config)))
+        self._open(EditForm(self.github, issue, StatusRules(self.config), self.details))
 
     def create(self, near: Issue | None) -> None:
         """Create an issue, in the last repo used, else `near`'s, else the first."""

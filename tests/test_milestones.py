@@ -91,7 +91,7 @@ async def test_repo_filter_hides_other_repos_milestones():
 
 
 class NoMilestones(FakeGitHub):
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
         raise GitHubError("Couldn't reach GitHub: timed out")
 
 
