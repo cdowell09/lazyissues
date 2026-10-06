@@ -27,9 +27,8 @@ class EditForm(Form):
         self.issue = issue
         self.details = details  # the app's detail cache
         self.rules = rules
-        self.before: IssueDetail | None = (
-            None  # what the form opened with: the cached detail, else GitHub's
-        )
+        # What the form opened with: the cached detail, else GitHub's.
+        self.before: IssueDetail | None = None
 
     def fields(self) -> ComposeResult:
         yield IssueFields()
