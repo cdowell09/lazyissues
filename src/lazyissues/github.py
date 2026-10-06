@@ -629,7 +629,11 @@ class GraphQLGateway:
         fields = {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]}
         returning = "assignable { ...IssueFields }"
         data = await self._mutate("addAssigneesToAssignable", fields, returning, _ISSUE_FIELDS)
-        return _issue(data["assignable"])
+        assigned = _issue(data["assignable"])
+        if login.casefold() not in {a.casefold() for a in assigned.assignees}:
+            # GitHub drops a login it can't assign without saying so.
+            raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
+        return assigned
 
     async def change_assignees(
         self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]

@@ -207,6 +207,13 @@ async def test_assign_looks_up_the_user(gateway, github):
         await gateway.assign("o/r", 1, "nobody")
 
 
+async def test_assign_raises_when_github_silently_drops_a_login_it_cant_assign(gateway, github):
+    github.users["kim"] = {"id": "U2"}  # a user, but the canned reply leaves only sam assigned
+
+    with pytest.raises(GitHubError, match="kim can't be assigned to issues in o/r"):
+        await gateway.assign("o/r", 1, "kim")
+
+
 def requests(github: GitHub) -> int:
     return len(github.lookups) + len(github.mutations)
 
