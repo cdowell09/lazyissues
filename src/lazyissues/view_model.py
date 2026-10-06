@@ -151,6 +151,7 @@ def progress_bar(done: int, total: int) -> str:
 def visible_groups(
     issues: list[Issue], grouping: Grouping, rules: StatusRules, state: ViewState
 ) -> list[Group]:
+    rules.forget()  # statuses are resolved once below and reused by the grouping and cells
     matching = [
         issue
         for issue in _filtered(issues, rules, state)

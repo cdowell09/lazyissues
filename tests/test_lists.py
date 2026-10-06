@@ -7,6 +7,7 @@ from textual.widgets import DataTable, TabbedContent
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.views.issue_list import IssueList
 
 
 def table(app: LazyIssuesApp, view: str) -> DataTable:
@@ -160,3 +161,18 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
 
         await pilot.press("z")  # on the parent unfolds it
         assert drawn(table(app, "team"))[4] == "    └ lanternfish#11"
+
+
+async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        view = app.query_one("#my-work", IssueList)
+        draws: list[None] = []
+        show = view.show
+        monkeypatch.setattr(view, "show", lambda: draws.append(show()))
+        await pilot.press("slash", *"glow")
+        assert draws == []
+        await pilot.pause(0.3)
+        assert len(draws) == 1
+        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
