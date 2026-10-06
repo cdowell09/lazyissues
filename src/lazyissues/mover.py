@@ -146,9 +146,9 @@ class Mover:
 
     async def send_each(self, outcomes: Sequence[Outcome], label: str) -> list[Outcome]:
         """Make a bulk move, `label`, of each issue `outcomes` plans for, with GitHub's
-        error on each it refuses. Every move starts at once, so each is pending, then they go
-        one by one; the lists redraw once, at the end. An issue with a move in flight is
-        skipped."""
+        error on each it refuses. Every move starts at once, so each shows as pending, then they
+        go one by one; the lists redraw when they start and once more at the end. An issue
+        with a move in flight is skipped."""
         started = [
             outcome
             if isinstance(outcome.plan, Skip) or self.moves.start(outcome.issue, label)
@@ -157,6 +157,7 @@ class Mover:
             )
             for outcome in outcomes
         ]
+        self.changed.publish([o.issue for o in started if not isinstance(o.plan, Skip)])
         done = []
         changed = []
         for outcome in started:
@@ -168,7 +169,7 @@ class Mover:
                     self.moves.dismiss(rejected)  # the bulk summary lists it, not a banner each
                     outcome = replace(outcome, error=rejected.error)
             done.append(outcome)
-        self.changed.publish(changed)  # one redraw for the whole bulk move
+        self.changed.publish(changed)  # one redraw for all of them
         return done
 
     async def _send_started(self, issue: Issue, plan: list[Step]) -> tuple[Rejected | None, Issue]:
