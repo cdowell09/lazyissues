@@ -349,7 +349,7 @@ class IssueList(IssueActions, Widget):
 
     def _cells(self, row: Row) -> tuple[str | Text, ...]:
         issue = row.issue
-        status = self.rules.status_of(issue)
+        status = row.status
         pending = self.store.moves.pending(issue.key)
         tree = "".join("│ " if more else "  " for more in row.continues[:-1])
         if row.continues:
