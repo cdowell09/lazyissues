@@ -204,12 +204,9 @@ class IssueList(IssueActions, Widget):
             self.show()
 
     def on_show(self) -> None:
-        # The first refresh waits until the tab is shown, so startup reads only the start tab.
-        if not self._loaded:
+        if not self._loaded:  # the first refresh waits until the tab is shown
             self._loaded = True
             self.reload()
-
-    def on_show(self) -> None:
         if self._stale:
             self.show()
 
