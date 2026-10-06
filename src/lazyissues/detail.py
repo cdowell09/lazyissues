@@ -92,6 +92,20 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     return widgets
 
 
+_FIRST_SCREEN = 8  # Markdown blocks drawn at once; about a screenful
+_BATCH = 8
+
+
+def _first_screen(widgets: list[Widget]) -> tuple[list[Widget], list[Widget]]:
+    """Splits `widgets` after the first `_FIRST_SCREEN` Markdown blocks."""
+    blocks = 0
+    for position, widget in enumerate(widgets):
+        blocks += isinstance(widget, Markdown)
+        if blocks > _FIRST_SCREEN:
+            return widgets[:position], widgets[position:]
+    return widgets, []
+
+
 class IssueDetailScreen(IssueActions, ModalScreen[None]):
     """Shows `issues[index]`, from `details` at once, and refetches it every time.
 
@@ -170,7 +184,8 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
 
     def on_changed(self, changed: Issue) -> None:
         self.issues = [changed if issue.key == changed.key else issue for issue in self.issues]
-        self.refresh_content()
+        if changed.key == self.issue.key:  # another issue's change must not redraw or scroll us
+            self.refresh_content()
 
     def show_issue(self) -> None:
         self.error = None
@@ -190,13 +205,24 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         render = _activity_widgets if self.showing_activity else _detail_widgets
         widgets += render(issue, detail)
         content = self.query_one("#detail", VerticalScroll)
+        self.workers.cancel_group(self, "fill")  # a half-filled earlier draw must not add to this
         content.remove_children()
-        content.mount_all(widgets)
+        first, rest = _first_screen(widgets)
+        content.mount_all(first)
         content.scroll_home(animate=False)
+        if rest:
+            self.run_worker(self.fill(content, rest), group="fill", exclusive=True)
+
+    async def fill(self, content: VerticalScroll, widgets: list[Widget]) -> None:
+        # Markdown costs ~15ms a block to mount, so the rest comes in batches that
+        # redrawing, stepping or closing cancels.
+        for start in range(0, len(widgets), _BATCH):
+            await content.mount_all(widgets[start : start + _BATCH])
 
     async def fetch(self, issue: Issue) -> None:
         # Stepping starts a new fetch in this exclusive group, cancelling this one.
         requested_at = now()
+        before = self.details.get(issue.key)
         try:
             detail = await self.github.issue_detail(issue.repo, issue.number)
         except GitHubError as e:
@@ -205,7 +231,8 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
             if not self.writer.written_since(issue.key, requested_at):  # else it's stale
                 moved = self.mover.moves.settle(detail.issue, requested_at)
                 self.details[issue.key] = replace(detail, issue=moved)
-        self.refresh_content()
+        if self.error or before is None or self.details.get(issue.key) != before:
+            self.refresh_content()  # else nothing new: don't redraw or jump to the top
 
     def selected(self) -> Issue:
         return self.issue
