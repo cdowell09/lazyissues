@@ -73,8 +73,7 @@ class FakeGitHub:
     ) -> IssueDetail:
         index = self._writable(repo, number)
         for login in add:
-            if repo in self.assignable and login not in self.assignable[repo]:
-                raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
+            self._assignable(repo, login)
         issue = self.issues[index]
         kept = [login for login in issue.assignees if login not in remove]
         added = [login for login in add if login not in kept]
@@ -179,10 +178,16 @@ class FakeGitHub:
 
     async def assign(self, repo: str, number: int, login: str) -> Issue:
         index = self._writable(repo, number)
+        self._assignable(repo, login)
         issue = self.issues[index]
         if login not in issue.assignees:
             self.issues[index] = replace(issue, assignees=(*issue.assignees, login))
         return self._current(self.issues[index])
+
+    def _assignable(self, repo: str, login: str) -> None:
+        """Refuse a login GitHub wouldn't assign to issues in `repo`, as the real one does."""
+        if repo in self.assignable and login not in self.assignable[repo]:
+            raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
 
     def _index(self, repo: str, number: int) -> int:
         for index, issue in enumerate(self.issues):

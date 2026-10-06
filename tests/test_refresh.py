@@ -7,6 +7,7 @@ from textual.pilot import Pilot
 from textual.widgets import DataTable
 
 from lazyissues import demo
+from lazyissues import store as store_module
 from lazyissues.app import LazyIssuesApp
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
@@ -160,3 +161,15 @@ async def test_quitting_saves_the_snapshot_of_changes_still_waiting(tmp_path):
 
     reopened = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
     assert [issue.ref for issue in reopened.issues]
+
+
+async def test_quitting_flushes_a_save_still_waiting_on_its_delay(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_module, "SAVE_DELAY", 3600)  # the timer can't be what saved it
+    path = snapshot_path(tmp_path, "my-work", demo.config().repo_names)
+    app = LazyIssuesApp(demo.config(), demo.github(), tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert not path.exists()  # waiting on the delay
+
+    assert [issue.ref for issue in IssueStore(path).issues]

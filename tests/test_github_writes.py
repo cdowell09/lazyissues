@@ -41,6 +41,7 @@ class GitHub:
         self.repositories = {("o", "r", 1): repository(), ("o", "r2", 5): repository("I5")}
         self.project: dict[str, Any] | None = {"id": "P1", "field": STATUS_FIELD}
         self.users = {"sam": {"id": "U1"}}
+        self.repo_labels = list(REPO_LABELS)
         self.lookups: list[dict[str, Any]] = []
         self.mutations: list[tuple[str, dict[str, Any]]] = []
 
@@ -59,7 +60,10 @@ class GitHub:
         if "repositoryOwner" in query:
             data = {"repositoryOwner": {"projectV2": self.project}}
         elif "labels(first: 100, after" in query:  # the repo's labels, paged
-            page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": REPO_LABELS}
+            page = {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": self.repo_labels,
+            }
             data = {"repository": {"labels": page}}
         elif "user(login" in query:
             data = {"user": self.users.get(variables["login"])}
@@ -104,6 +108,30 @@ async def test_remove_labels_sends_the_issues_label_ids(gateway, github):
     assert github.mutations == [
         ("removeLabelsFromLabelable", {"labelableId": "I1", "labelIds": ["L3"]})
     ]
+
+
+async def test_add_labels_finds_a_label_made_elsewhere_since_the_session_read_them(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
+    github.repo_labels.append({"id": "L9", "name": "In Review"})
+
+    await gateway.add_labels("o/r", 1, ["In Review"])
+
+    assert [name for name, _ in github.mutations] == ["addLabelsToLabelable"] * 2
+    assert github.mutations[-1][1]["labelIds"] == ["L9"]  # no createLabel: it exists
+
+
+async def test_remove_labels_finds_a_label_made_elsewhere_since_the_session_read_them(
+    gateway, github
+):
+    await gateway.remove_labels("o/r", 1, ["todo"])
+    github.repo_labels.append({"id": "L9", "name": "new"})
+
+    await gateway.remove_labels("o/r", 1, ["new"])
+
+    assert github.mutations[-1] == (
+        "removeLabelsFromLabelable",
+        {"labelableId": "I1", "labelIds": ["L9"]},
+    )
 
 
 async def test_project_status_options_in_board_order(gateway, github):

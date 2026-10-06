@@ -558,6 +558,20 @@ async def test_repeat_lookups_of_assignable_users_and_milestones_send_one_reques
     assert len(sent) == 2
 
 
+async def test_a_caller_changing_a_returned_list_doesnt_change_the_sessions_cache():
+    handler, _ = replying(
+        {"repository": {"assignableUsers": page([{"login": "me"}])}},
+        {"repository": {"labels": page([{"id": "L1", "name": "bug"}])}},
+    )
+    github = gateway(handler)
+
+    (await github.assignable_users("o/r")).append("intruder")
+    (await github.repo_labels("o/r")).append("intruder")
+
+    assert await github.assignable_users("o/r") == ["me"]
+    assert await github.repo_labels("o/r") == ["bug"]
+
+
 async def test_a_fresh_milestone_read_refetches_for_current_counts():
     def milestones(open: int) -> dict:
         node = {"title": "v1", "open": {"totalCount": open}, "closed": {"totalCount": 0}}

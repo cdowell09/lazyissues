@@ -58,7 +58,6 @@ class IssueStore:
         self.requested_at = -math.inf  # when the read behind `issues` was requested
         self._written: dict[str, float] = {}  # when each issue's latest write was sent
         self._saving: asyncio.TimerHandle | None = None  # the pending save, if any
-        self._dirty = False  # changes the snapshot doesn't have yet
 
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
         """Await a read from GitHub and apply it, stamped with when it was requested."""
@@ -118,22 +117,23 @@ class IssueStore:
         loop to wait on, save at once."""
         if self.path is None:
             return
-        self._dirty = True
         if self._saving:
             return
         try:
             self._saving = asyncio.get_running_loop().call_later(SAVE_DELAY, self.flush)
         except RuntimeError:
-            self.flush()
+            self._write()
 
     def flush(self) -> None:
         """Write the snapshot now if a save is pending; call on exit."""
         if self._saving:
             self._saving.cancel()
             self._saving = None
-        if self.path is None or not self._dirty:
+            self._write()
+
+    def _write(self) -> None:
+        if self.path is None:
             return
-        self._dirty = False
         snapshot = {"version": SNAPSHOT_VERSION, "issues": [asdict(i) for i in self.issues]}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)

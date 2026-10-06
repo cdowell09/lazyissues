@@ -254,15 +254,19 @@ def test_progress_bar_fills_with_the_share_of_done_issues():
     assert progress_bar(5, 5) == "██████████ 5/5"
 
 
-def test_each_issues_status_is_resolved_once_per_call():
+def test_each_shown_issues_status_is_resolved_once_and_carried_on_its_row():
     class Counting(StatusRules):
         calls = 0
 
-        def repo_of(self, issue):
+        def status_of(self, issue):
             self.calls += 1
-            return super().repo_of(issue)
+            return super().status_of(issue)
 
     rules = Counting(CONFIG)
-    issues = [issue(1, "todo"), issue(2, "in-progress")]
-    visible_groups(issues, by_status(rules), rules, ViewState(focus="Todo"))
-    assert rules.calls <= 2 * len(issues)  # status_of asks repo_of twice
+    issues = [issue(1, "todo"), issue(2, "in-progress"), issue(3, "todo", closed=True)]
+    one_group = lambda found: [("all", found)]  # noqa: E731  (asks no status itself)
+
+    groups = visible_groups(issues, one_group, rules, ViewState(focus="Todo"))
+
+    assert rules.calls == 2  # the closed issue is hidden before any status is read
+    assert [(r.issue.number, r.status.name) for r in groups[0].rows] == [(1, "Todo")]

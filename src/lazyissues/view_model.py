@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from lazyissues.models import Issue, Milestone
-from lazyissues.statuses import StatusRules
+from lazyissues.statuses import IssueStatus, StatusRules
 
 # Splits issues into named groups in display order; a tab's grouping.
 Grouping = Callable[[list[Issue]], list[tuple[str, list[Issue]]]]
@@ -60,6 +60,7 @@ class Row:
     """An issue as a group lists it: its sub-issues in the group follow it, indented."""
 
     issue: Issue
+    status: IssueStatus  # resolved once for the redraw, as the cells show it
     # One entry per parent above it in the group, outermost first: whether a later
     # sub-issue of that parent follows, so the tree's line carries on down past this row.
     continues: tuple[bool, ...] = ()
@@ -151,23 +152,22 @@ def progress_bar(done: int, total: int) -> str:
 def visible_groups(
     issues: list[Issue], grouping: Grouping, rules: StatusRules, state: ViewState
 ) -> list[Group]:
-    rules.forget()  # statuses are resolved once below and reused by the grouping and cells
-    matching = [
-        issue
-        for issue in _filtered(issues, rules, state)
-        if state.focus in (None, rules.status_of(issue).name)
-    ]
+    filtered = _filtered(issues, rules, state)
+    statuses = {issue.key: rules.status_of(issue) for issue in filtered}  # once each
+    matching = [i for i in filtered if state.focus in (None, statuses[i.key].name)]
     groups = []
     for name, members in grouping(matching):
         if not members and not _contains(name, state.search):
             continue  # an empty member group shows unless a search names someone else
         folded = name in state.folded
-        rows = [] if folded else _nested(members, state.folded)
+        rows = [] if folded else _nested(members, state.folded, statuses)
         groups.append(Group(name, members, rows, folded))
     return groups
 
 
-def _nested(issues: list[Issue], folded: frozenset[str]) -> list[Row]:
+def _nested(
+    issues: list[Issue], folded: frozenset[str], statuses: dict[str, IssueStatus]
+) -> list[Row]:
     """`issues` in order, with each one's sub-issues in the list moved under it; those
     of a parent in `folded` are left out."""
     keys = {issue.key for issue in issues}
@@ -180,7 +180,7 @@ def _nested(issues: list[Issue], folded: frozenset[str]) -> list[Row]:
     def add(issue: Issue, continues: tuple[bool, ...]) -> None:
         subs = sub_issues.get(issue.key, [])
         hide = bool(subs) and issue.key in folded
-        rows.append(Row(issue, continues, bool(subs), hide))
+        rows.append(Row(issue, statuses[issue.key], continues, bool(subs), hide))
         shown = [] if hide else subs
         for at, sub in enumerate(shown):
             add(sub, (*continues, at < len(shown) - 1))

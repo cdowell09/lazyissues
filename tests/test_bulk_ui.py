@@ -294,6 +294,27 @@ async def test_bulk_assign_offers_the_team_first_and_reports_each_issue():
         assert docs.assignees == ("sam-reef",)
 
 
+async def test_a_bulk_assign_is_refused_for_a_login_github_wont_assign_in_that_repo():
+    github = demo.github()
+    app = LazyIssuesApp(demo.config(), github)
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        await open_tab(pilot, "unassigned")
+        await pilot.press("A", "B")
+        await choose(pilot, "Assign")
+        await choose(pilot, "Assign to sam-reef")
+        await until(pilot, lambda: isinstance(app.screen, BulkConfirm))
+        github.assignable["octo-dev/tidepool"].remove("sam-reef")  # changed since it was listed
+        await pilot.press("enter")
+
+        await until(pilot, lambda: isinstance(app.screen, BulkSummary))
+        lines = report(app)
+        assert "Failed (1)" in lines
+        assert "  tidepool#18  sam-reef can't be assigned to issues in octo-dev/tidepool." in lines
+        [docs] = [i for i in await github.search_issues("is:issue") if i.key == TIDE_18]
+        assert docs.assignees == ()
+
+
 async def test_question_mark_lists_the_selection_and_bulk_keys():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test(size=(100, 140)) as pilot:
