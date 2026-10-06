@@ -1,5 +1,6 @@
 """Startup refreshes only the start tab; other tabs refresh the first time they are shown."""
 
+from listed import show_tab
 from textual.widgets import TabbedContent
 
 from lazyissues import demo
@@ -46,8 +47,7 @@ async def test_a_reload_of_a_tab_never_shown_waits_for_its_first_show():
         await settle(pilot)
         assert github.searched == []
 
-        app.query_one(TabbedContent).active = "tab-1"  # Team
-        await settle(pilot)
+        await show_tab(pilot, "team")
         assert github.searched and len(github.searched) == len(set(github.searched))
 
 
@@ -96,6 +96,5 @@ async def test_applying_a_config_to_a_hidden_tab_redraws_it_only_when_shown(monk
         team.configure(app.config)
         assert drawn == []
 
-        app.query_one(TabbedContent).active = "tab-1"
-        await settle(pilot)
+        await show_tab(pilot, "team")
         assert len(drawn) == 2  # the pending redraw, then the first refresh's result

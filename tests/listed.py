@@ -10,7 +10,7 @@ import re
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
 
-from lazyissues.views.issue_list import FOLDED, UNFOLDED
+from lazyissues.views.issue_list import FOLDED, UNFOLDED, IssueList
 
 # A row's drawing: its indentation, fold arrow and sub-issue tree lines.
 DRAWING = re.compile(f"^[ {FOLDED}{UNFOLDED}│├└]+")
@@ -32,7 +32,14 @@ async def show_tab(pilot: Pilot, view: str) -> None:
     pane = pilot.app.query_one(f"#{view}").parent
     assert pane is not None and pane.id is not None
     pilot.app.query_one(TabbedContent).active = pane.id
-    await pilot.pause()
-    await pilot.pause()
+    # The refresh starts when the Show event arrives, which may take more than a pause on a
+    # slow machine; waiting on workers before then would find none.
+    listed = pilot.app.query_one(f"#{view}", IssueList)
+    for _ in range(200):
+        if listed._loaded:
+            break
+        await pilot.pause(0.01)
+    else:
+        raise AssertionError(f"{view} was never shown")
     await pilot.app.workers.wait_for_complete()
     await pilot.pause()

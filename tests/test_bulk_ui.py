@@ -3,10 +3,10 @@
 import asyncio
 from collections.abc import Callable
 
-from listed import plain
+from listed import plain, show_tab
 from textual.app import App
 from textual.pilot import Pilot
-from textual.widgets import DataTable, OptionList, Static, TabbedContent
+from textual.widgets import DataTable, OptionList, Static
 from textual.widgets.data_table import RowKey
 
 from lazyissues import demo, mover
@@ -250,10 +250,7 @@ async def test_a_bulk_move_github_refuses_lists_its_error_and_keeps_the_status()
 
 async def open_tab(pilot: Pilot, view: str) -> None:
     """Switch to the tab holding `view` and focus its list, as a user would."""
-    pane = pilot.app.query_one(f"#{view}").parent
-    assert pane is not None and pane.id is not None
-    pilot.app.query_one(TabbedContent).active = pane.id
-    await pilot.pause()
+    await show_tab(pilot, view)
     table(pilot.app, view).focus()
     await ready(pilot)
 

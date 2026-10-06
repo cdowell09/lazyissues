@@ -6,6 +6,7 @@ import subprocess
 import sys
 from dataclasses import replace
 
+from listed import show_tab
 from textual.widgets import DataTable, Input, Markdown, Select, Static, TabbedContent, TextArea
 
 from lazyissues.app import LazyIssuesApp
@@ -417,8 +418,7 @@ async def test_c_creates_an_issue_with_its_status_label_in_a_label_backed_repo()
         cached = app.details["o/r#3"]
         assert (cached.body, cached.issue.milestone) == ("Body text", "v2")
         # Unassigned lists new issues, so it shows this one when first opened.
-        app.query_one(TabbedContent).active = "tab-3"
-        await settle(pilot)
+        await show_tab(pilot, "unassigned")
         assert "o/r#3" in [i.key for i in app.query_one("#unassigned", IssueList).store.issues]
 
 

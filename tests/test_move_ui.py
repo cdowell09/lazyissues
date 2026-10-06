@@ -334,7 +334,11 @@ async def test_a_move_redraws_only_the_visible_tab_and_a_hidden_one_catches_up_w
         pane = app.query_one("#team").parent
         assert pane is not None and pane.id is not None
         app.query_one(TabbedContent).active = pane.id
-        await ready(pilot)
         team = app.query_one("#team DataTable", DataTable)
-        shown = [team.get_row_at(i) for i in range(team.row_count)]
-        assert any("tidepool#12" in str(row[1]) and str(row[3]) == "In Review" for row in shown)
+
+        def caught_up() -> bool:
+            shown = [team.get_row_at(i) for i in range(team.row_count)]
+            return any("tidepool#12" in str(row[1]) and str(row[3]) == "In Review" for row in shown)
+
+        # The first show starts the tab's refresh, so there may be no worker to wait on yet.
+        await until(pilot, caught_up)
