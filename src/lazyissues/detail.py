@@ -4,6 +4,7 @@ Any view opens it over its list with the list's issues and the selected one; ste
 through issues here tells the view, through `select`, which issue to select.
 """
 
+import asyncio
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -94,6 +95,7 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
 
 _FIRST_SCREEN = 8  # Markdown blocks drawn at once; about a screenful
 _BATCH = 8
+_PAUSE = 0.1
 
 
 def _first_screen(widgets: list[Widget]) -> tuple[list[Widget], list[Widget]]:
@@ -211,12 +213,16 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         content.mount_all(first)
         content.scroll_home(animate=False)
         if rest:
-            self.run_worker(self.fill(content, rest), group="fill", exclusive=True)
+            # After the first screen has been laid out and painted, not before.
+            self.call_after_refresh(
+                self.run_worker, self.fill(content, rest), group="fill", exclusive=True
+            )
 
     async def fill(self, content: VerticalScroll, widgets: list[Widget]) -> None:
         # Markdown costs ~15ms a block to mount, so the rest comes in batches that
         # redrawing, stepping or closing cancels.
         for start in range(0, len(widgets), _BATCH):
+            await asyncio.sleep(_PAUSE)  # lets the screen paint
             await content.mount_all(widgets[start : start + _BATCH])
 
     async def fetch(self, issue: Issue) -> None:
