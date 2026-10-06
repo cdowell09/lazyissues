@@ -93,11 +93,8 @@ class Writer:
                     # and an uncached one stays uncached.
                     cached = self.details.get(assigned.key)
                     detail = replace(cached, issue=assigned) if cached else IssueDetail(assigned)
-                    each = self._settled(Written(detail, sent_at, AssignForm.REGROUPS))
-                    self._written_at[assigned.key] = sent_at
-                    if cached:
-                        self.details[assigned.key] = each.detail
-                    written.append(each)
+                    each = Written(detail, sent_at, AssignForm.REGROUPS)
+                    written.append(self._record(each, cache=cached is not None))
             done.append(outcome)
         self.changed.publish(written)  # one redraw for the whole bulk assign
         return done
@@ -105,7 +102,7 @@ class Writer:
     def _open(self, form: Form, done: Callable[[Written], None] | None = None) -> None:
         def closed(written: Written | None) -> None:
             if written is not None:
-                (done or self._show)(self._settled(written))
+                (done or self._show)(written)
 
         self.app.push_screen(form, closed)
 
@@ -114,11 +111,18 @@ class Writer:
         settled = self.moves.settle(written.detail.issue, written.sent_at)
         return replace(written, detail=replace(written.detail, issue=settled))
 
-    def _show(self, written: Written) -> None:
+    def _record(self, written: Written, *, cache: bool = True) -> Written:
+        """Settle `written` and note it: when it was sent, and its detail in the cache
+        (`cache` False leaves an uncached detail uncached)."""
+        written = self._settled(written)
         key = written.detail.issue.key
-        self.details[key] = written.detail
+        if cache:
+            self.details[key] = written.detail
         self._written_at[key] = written.sent_at
-        self.changed.publish([written])
+        return written
+
+    def _show(self, written: Written) -> None:
+        self.changed.publish([self._record(written)])
 
     def _created(self, written: Written) -> None:
         issue = written.detail.issue
