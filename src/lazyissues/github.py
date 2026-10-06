@@ -54,8 +54,9 @@ class Gateway(Protocol):
 
     # Writes. Each issue is `repo` ("owner/name") and `number`.
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
-        """Add the repo's label matching `name` as statuses match, creating it if none does."""
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
+        """Add, in one request, the repo's labels matching `names` as statuses match, creating
+        any the repo lacks."""
         ...
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None: ...
@@ -394,6 +395,13 @@ class GraphQLGateway:
             headers={"Authorization": f"bearer {token}"},
             timeout=30,
         )
+        # Per-session caches: IDs never change, and the rest only changes by our own writes.
+        self._issue_ids: dict[tuple[str, int], str] = {}
+        self._repo_ids: dict[str, str] = {}
+        self._user_ids: dict[str, str] = {}
+        self._label_nodes: dict[str, list[dict[str, Any]]] = {}
+        self._boards: dict[str, dict[str, Any]] = {}
+        self._viewer: tuple[str, set[str]] | None = None
 
     async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
         return (await self._send(query, **variables))[0]
@@ -439,9 +447,11 @@ class GraphQLGateway:
 
     async def whoami(self) -> tuple[str, set[str]]:
         """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
-        data, headers = await self._send(_VIEWER)
-        scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
-        return data["viewer"]["login"], scopes - {""}
+        if self._viewer is None:
+            data, headers = await self._send(_VIEWER)
+            scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
+            self._viewer = data["viewer"]["login"], scopes - {""}
+        return self._viewer
 
     async def repo_labels(self, repo: str) -> list[str]:
         return [label["name"] for label in await self._labels(repo)]
@@ -470,24 +480,29 @@ class GraphQLGateway:
     async def project_status_options(self, project: str) -> list[str]:
         return [option["name"] for option in (await self._project(project))["field"]["options"]]
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
-        target = await self._write_target(repo, number)
-        label = _named(await self._labels(repo), name)
-        if label is None:
-            label_input = {"repositoryId": target["id"], "name": name, "color": LABEL_COLOR}
-            created = await self._mutate("createLabel", label_input, "label { id }")
-            label = created["label"]
-        await self._mutate(
-            "addLabelsToLabelable",
-            {"labelableId": target["issue"]["id"], "labelIds": [label["id"]]},
-        )
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
+        issue_id, labels = await asyncio.gather(self._issue_id(repo, number), self._labels(repo))
+        ids = []
+        for name in names:
+            label = _named(labels, name)
+            if label is None:
+                label_input = {
+                    "repositoryId": await self._repo_id(repo),
+                    "name": name,
+                    "color": LABEL_COLOR,
+                }
+                created = (await self._mutate("createLabel", label_input, "label { id }"))["label"]
+                label = {"id": created["id"], "name": name}
+                labels.append(label)
+            ids.append(label["id"])
+        await self._mutate("addLabelsToLabelable", {"labelableId": issue_id, "labelIds": ids})
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
-        issue = (await self._write_target(repo, number))["issue"]
-        ids = [label["id"] for label in issue["labels"]["nodes"] if label["name"] in names]
+        issue_id, labels = await asyncio.gather(self._issue_id(repo, number), self._labels(repo))
+        ids = [label["id"] for label in labels if label["name"] in names]
         if ids:
             await self._mutate(
-                "removeLabelsFromLabelable", {"labelableId": issue["id"], "labelIds": ids}
+                "removeLabelsFromLabelable", {"labelableId": issue_id, "labelIds": ids}
             )
 
     async def add_to_project(self, repo: str, number: int, project: str) -> None:
@@ -577,10 +592,12 @@ class GraphQLGateway:
         return detail or await self.issue_detail(repo, number)
 
     async def _user_id(self, login: str) -> str:
-        user = (await self._query(_USER, login=login))["user"]
-        if user is None:
-            raise GitHubError(f"No GitHub user {login}.")
-        return user["id"]
+        if login not in self._user_ids:
+            user = (await self._query(_USER, login=login))["user"]
+            if user is None:
+                raise GitHubError(f"No GitHub user {login}.")
+            self._user_ids[login] = user["id"]
+        return self._user_ids[login]
 
     async def create_issue(
         self,
@@ -591,10 +608,8 @@ class GraphQLGateway:
         labels: Sequence[str] = (),
         milestone: str | None = None,
     ) -> IssueDetail:
-        owner, name = repo.split("/", 1)
-        repository = (await self._query(_REPO_ID, owner=owner, name=name))["repository"]
         fields = {
-            "repositoryId": repository["id"],
+            "repositoryId": await self._repo_id(repo),
             "title": title,
             "body": body,
             "labelIds": await self._label_ids(repo, labels),
@@ -630,11 +645,13 @@ class GraphQLGateway:
         return _detail((await self._mutate(mutation, fields, returning, _DETAIL_FIELDS))[issue])
 
     async def _labels(self, repo: str) -> list[dict[str, Any]]:
-        """Every label of `repo`, with its ID."""
-        owner, name = repo.split("/")
-        return await self._nodes(
-            _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
-        )
+        """Every label of `repo`, with its ID; `add_labels` keeps the list current."""
+        if repo not in self._label_nodes:
+            owner, name = repo.split("/")
+            self._label_nodes[repo] = await self._nodes(
+                _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
+            )
+        return self._label_nodes[repo]
 
     async def _milestones(self, repo: str) -> list[dict[str, Any]]:
         """Every open milestone of `repo`, soonest due first, with its ID."""
@@ -656,24 +673,39 @@ class GraphQLGateway:
         return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
+        """The issue's IDs and its live labels and project items (never cached)."""
         owner, name = repo.split("/", 1)
-        return (await self._query(_WRITE_TARGET, owner=owner, name=name, number=number))[
+        target = (await self._query(_WRITE_TARGET, owner=owner, name=name, number=number))[
             "repository"
         ]
+        self._repo_ids[repo] = target["id"]
+        self._issue_ids[repo, number] = target["issue"]["id"]
+        return target
 
     async def _issue_id(self, repo: str, number: int) -> str:
-        return (await self._write_target(repo, number))["issue"]["id"]
+        if (repo, number) not in self._issue_ids:
+            await self._write_target(repo, number)
+        return self._issue_ids[repo, number]
+
+    async def _repo_id(self, repo: str) -> str:
+        if repo not in self._repo_ids:
+            owner, name = repo.split("/", 1)
+            data = await self._query(_REPO_ID, owner=owner, name=name)
+            self._repo_ids[repo] = data["repository"]["id"]
+        return self._repo_ids[repo]
 
     async def _project(self, project: str) -> dict[str, Any]:
         """The project "owner/number" with its Status field."""
-        login, number = project.split("/", 1)
-        owner = (await self._query(_PROJECT, login=login, number=int(number)))["repositoryOwner"]
-        board = (owner or {}).get("projectV2")
-        if board is None:
-            raise GitHubError(f"Can't find project {project}.")
-        if not board["field"]:
-            raise GitHubError(f"Project {project} has no single-select Status field.")
-        return board
+        if project not in self._boards:
+            login, number = project.split("/", 1)
+            data = await self._query(_PROJECT, login=login, number=int(number))
+            board = (data["repositoryOwner"] or {}).get("projectV2")
+            if board is None:
+                raise GitHubError(f"Can't find project {project}.")
+            if not board["field"]:
+                raise GitHubError(f"Project {project} has no single-select Status field.")
+            self._boards[project] = board
+        return self._boards[project]
 
 
 def _named(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
