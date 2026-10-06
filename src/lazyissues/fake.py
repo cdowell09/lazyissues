@@ -59,7 +59,7 @@ class FakeGitHub:
         return replace(self.details.get(issue.key, IssueDetail(issue)), issue=self._current(issue))
 
     async def assignable_users(self, repo: str) -> list[str]:
-        return self.assignable.get(self._resolve(repo), [])
+        return list(self.assignable.get(self._resolve(repo), []))
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         self._writable(repo, number)
@@ -241,7 +241,7 @@ class FakeGitHub:
         return self.viewer, self.scopes
 
     async def repo_labels(self, repo: str) -> list[str]:
-        return self.labels.get(self._resolve(repo), [])
+        return list(self.labels.get(self._resolve(repo), []))
 
     async def repo_projects(self, repo: str) -> list[Project]:
         return self.projects.get(self._resolve(repo), [])

@@ -748,7 +748,7 @@ class GraphQLGateway:
             self._milestone_nodes[repo] = await self._nodes(
                 _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
             )
-        return self._milestone_nodes[repo]
+        return list(self._milestone_nodes[repo])
 
     async def _label_ids(self, repo: str, labels: Sequence[str]) -> list[str]:
         if not labels:
