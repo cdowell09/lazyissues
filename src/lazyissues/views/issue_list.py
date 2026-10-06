@@ -175,6 +175,7 @@ class IssueList(IssueActions, Widget):
         self._rows: list[tuple[str, Row | None]] = []
         self._groups: dict[str, Group] = {}  # the shown groups, by name
         self.error: str | None = None  # why the latest refresh failed
+        self._stale = False  # changed while hidden: redraw when shown
 
     @property
     def issues(self) -> list[Issue]:
@@ -201,6 +202,20 @@ class IssueList(IssueActions, Widget):
         if self.store.issues:
             self.show()
         self.reload()
+
+    def on_show(self) -> None:
+        if self._stale:
+            self.show()
+
+    def on_unmount(self) -> None:
+        self.store.flush()  # the snapshot of changes still waiting to be saved
+
+    def redraw(self) -> None:
+        """Draw now if shown; a hidden tab draws when it's next shown."""
+        if all(widget.display for widget in self.ancestors_with_self):
+            self.show()
+        else:
+            self._stale = True
 
     def watch_refreshing(self, refreshing: bool) -> None:
         self.set_class(refreshing, "-refreshing")
@@ -269,6 +284,7 @@ class IssueList(IssueActions, Widget):
 
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
+        self._stale = False
         table = self.query_one(IssueTable)
         row, selected = table.cursor_row, None
         if table.rows:
@@ -410,13 +426,14 @@ class IssueList(IssueActions, Widget):
         if issue.key in table.rows:
             table.move_cursor(row=table.get_row_index(issue.key))
 
-    def _on_moved(self, _: Issue) -> None:
-        self.store.apply_moves()
-        self.show()
+    def _on_moved(self, moved: Issue) -> None:
+        if any(issue.key == moved.key for issue in self.store.issues):
+            self.store.apply_moves()
+            self.redraw()
 
     def _on_written(self, written: Written) -> None:
         if self.store.update(written.detail.issue, written.sent_at):
-            self.show()
+            self.redraw()
         elif written.regroups:  # only this tab's search knows whether it belongs here now
             self.reload()
 

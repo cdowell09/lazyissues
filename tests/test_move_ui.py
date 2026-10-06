@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from listed import plain
 from textual.app import App
 from textual.pilot import Pilot
-from textual.widgets import DataTable, Input, OptionList, Static
+from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
@@ -304,3 +304,33 @@ async def test_an_issue_has_one_move_in_flight_at_a_time():
         github.writes.set()
         await ready(pilot)
         assert "octo-dev/tidepool#15" in groups(app)["In Progress"]
+
+
+async def test_a_move_redraws_only_the_visible_tab_and_a_hidden_one_catches_up_when_opened(
+    monkeypatch,
+):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await select(pilot, TIDE_12)
+        redrawn: list[str] = []
+        show = IssueList.show
+
+        def spy(self: IssueList) -> None:
+            redrawn.append(self.id or "")
+            show(self)
+
+        monkeypatch.setattr(IssueList, "show", spy)
+
+        await pilot.press("m")
+        await choose(pilot, "In Review")
+        await ready(pilot)
+
+        assert "my-work" in redrawn
+        assert not {"team", "milestones", "unassigned"} & set(redrawn)
+        pane = app.query_one("#team").parent
+        assert pane is not None and pane.id is not None
+        app.query_one(TabbedContent).active = pane.id
+        await ready(pilot)
+        team = app.query_one("#team DataTable", DataTable)
+        shown = [team.get_row_at(i) for i in range(team.row_count)]
+        assert any("tidepool#12" in str(row[1]) and str(row[3]) == "In Review" for row in shown)

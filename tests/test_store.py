@@ -180,3 +180,31 @@ def test_a_move_confirmed_before_a_write_is_not_applied_over_it_again(tmp_path):
     store.apply_moves()
 
     assert store.issues[0].labels == ("bug",)
+
+
+def test_a_burst_of_changes_saves_one_snapshot_holding_the_last(tmp_path, monkeypatch):
+    monkeypatch.setattr("lazyissues.store.SAVE_DELAY", 0.01)
+    path = tmp_path / "snapshot.json"
+
+    async def burst() -> None:
+        store = IssueStore(path)
+        store.replace([issue(1)], requested_at=1.0)
+        store.replace([issue(1), issue(2)], requested_at=2.0)
+        assert not path.exists()  # waiting for the burst to end
+        await asyncio.sleep(0.05)
+
+    asyncio.run(burst())
+
+    assert [i.number for i in IssueStore(path).issues] == [1, 2]
+
+
+def test_flush_saves_a_pending_snapshot_at_once(tmp_path):
+    path = tmp_path / "snapshot.json"
+
+    async def change_and_exit() -> None:
+        store = IssueStore(path)
+        store.replace([issue(1)], requested_at=1.0)
+        store.flush()
+        assert IssueStore(path).issues == [issue(1)]
+
+    asyncio.run(change_and_exit())
