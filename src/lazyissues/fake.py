@@ -125,16 +125,17 @@ class FakeGitHub:
                     return list(board.status_options)
         raise GitHubError(f"Could not resolve to a ProjectV2 with the number {project}.")
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)
         repo_labels = self.labels.setdefault(repo, [])
-        label = next((lb for lb in repo_labels if normalize(lb) == normalize(name)), None)
-        if label is None:
-            label = name
-            repo_labels.append(label)
-        issue = self.issues[index]
-        if label not in issue.labels:
-            self.issues[index] = replace(issue, labels=(*issue.labels, label))
+        for name in names:
+            label = next((lb for lb in repo_labels if normalize(lb) == normalize(name)), None)
+            if label is None:
+                label = name
+                repo_labels.append(label)
+            issue = self.issues[index]
+            if label not in issue.labels:
+                self.issues[index] = replace(issue, labels=(*issue.labels, label))
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)

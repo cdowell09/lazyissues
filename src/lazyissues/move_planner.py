@@ -21,7 +21,7 @@ class AddLabel:
     name: str
 
     async def send(self, github: Gateway, issue: Issue) -> None:
-        await github.add_label(issue.repo, issue.number, self.name)
+        await github.add_labels(issue.repo, issue.number, [self.name])
 
     def apply(self, issue: Issue) -> Issue:
         if any(normalize(label) == normalize(self.name) for label in issue.labels):

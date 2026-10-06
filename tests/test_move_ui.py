@@ -40,9 +40,9 @@ class Gated(FakeGitHub):
         await self.searches.wait()
         return answer
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         await self.writes.wait()
-        await super().add_label(repo, number, name)
+        await super().add_labels(repo, number, names)
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         await self.writes.wait()

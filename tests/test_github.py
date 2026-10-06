@@ -297,6 +297,14 @@ async def test_whoami_gives_the_login_and_the_token_scopes_from_the_response_hea
     assert await gateway(handler).whoami() == ("me", scopes)
 
 
+async def test_whoami_is_requested_once_per_session():
+    handler, sent = replying({"viewer": {"login": "me"}})
+    github = gateway(handler)
+
+    assert await github.whoami() == await github.whoami()
+    assert len(sent) == 1
+
+
 async def test_repo_labels_follows_pages():
     sent = []
 
