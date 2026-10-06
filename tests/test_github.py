@@ -539,3 +539,32 @@ async def test_update_issue_clears_the_milestone():
     await gateway(handler).update_issue("o/r", 5, {"milestone": None})
 
     assert mutation(sent[-1]) == ("updateIssue", {"id": "I_5", "milestoneId": None})
+
+
+async def test_repeat_lookups_of_assignable_users_and_milestones_send_one_request_each():
+    users = page([{"login": "me"}])
+    node = {"title": "v1", "open": {"totalCount": 1}, "closed": {"totalCount": 0}}
+    handler, sent = replying(
+        {"repository": {"assignableUsers": users}},
+        {"repository": {"milestones": page([node])}},
+    )
+    github = gateway(handler)
+
+    for _ in range(2):
+        await github.assignable_users("o/r")
+        await github.repo_milestones("o/r")
+
+    assert len(sent) == 2
+
+
+async def test_a_fresh_milestone_read_refetches_for_current_counts():
+    def milestones(open: int) -> dict:
+        node = {"title": "v1", "open": {"totalCount": open}, "closed": {"totalCount": 0}}
+        return {"repository": {"milestones": page([node])}}
+
+    handler, sent = replying(milestones(1), milestones(2))
+    github = gateway(handler)
+
+    await github.repo_milestones("o/r")
+    assert (await github.repo_milestones("o/r", fresh=True))[0].open == 2
+    assert len(sent) == 2
