@@ -3,9 +3,12 @@ import webbrowser
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import DataTable, Markdown, Static
 
+from lazyissues import detail as detail_module
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
 from lazyissues.detail import _FIRST_SCREEN, IssueDetailScreen, _first_screen
@@ -252,13 +255,6 @@ async def test_stepping_mid_fill_shows_only_the_new_issue():
 
 
 async def test_stepping_from_a_long_issue_to_a_short_one_within_a_frame_adds_nothing_of_the_first():
-    class Held(FakeGitHub):
-        """Never answers the detail fetch, as a slow network wouldn't within the test."""
-
-        async def issue_detail(self, repo: str, number: int) -> IssueDetail:
-            await asyncio.Event().wait()
-            raise AssertionError
-
     long = long_thread()
     app = app_on(Held(viewer=long.viewer, issues=long.issues))
     app.details.update(long.details)  # both cached, so both draw at once
@@ -284,6 +280,40 @@ def test_exactly_a_first_screen_of_markdown_blocks_is_mounted_at_once_and_one_mo
 
     assert _first_screen(blocks[:8]) == (blocks[:8], [])
     assert _first_screen(blocks) == (blocks[:8], blocks[8:])
+
+
+class Held(FakeGitHub):
+    """Never answers the detail fetch, so only the cached detail is drawn."""
+
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+        await asyncio.Event().wait()
+        raise AssertionError
+
+
+@pytest.mark.parametrize(("widgets", "mounts"), [(8, 1), (9, 2), (16, 2), (17, 3)])
+async def test_the_fill_mounts_a_batch_of_eight_widgets_at_a_time(monkeypatch, widgets, mounts):
+    monkeypatch.setattr(detail_module, "_PAUSE", 0)
+    long = long_thread()
+    app = app_on(Held(viewer=long.viewer, issues=long.issues))
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter")
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+        content = screen.query_one("#detail", VerticalScroll)
+        calls: list[int] = []
+        mount_all = content.mount_all
+
+        def counting(batch, *args, **kwargs):
+            calls.append(len(list(batch)))
+            return mount_all(batch, *args, **kwargs)
+
+        monkeypatch.setattr(content, "mount_all", counting)
+
+        rest = [Static(f"w{n}") for n in range(widgets)]
+        await screen.fill(screen._draws, content, rest)
+
+        assert calls == [8] * (mounts - 1) + [widgets - 8 * (mounts - 1)]
 
 
 def detail_children(app: LazyIssuesApp) -> list:
