@@ -4,8 +4,8 @@ import asyncio
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
@@ -31,6 +31,21 @@ LABEL_COLOR = "ededed"  # GitHub's gray, for a status label lazyissues creates
 
 class GitHubError(Exception):
     pass
+
+
+class RateLimited(GitHubError):
+    """GitHub's rate limit, saying when to try again; `retry_after` is seconds, if it said."""
+
+    def __init__(self, headers: httpx.Headers) -> None:
+        self.retry_after: int | None = None
+        when = "later"
+        if (wait := headers.get("retry-after", "")).isdigit():
+            self.retry_after = int(wait)
+            when = f"in {wait} seconds"
+        elif (reset := headers.get("x-ratelimit-reset", "")).isdigit():
+            at = datetime.fromtimestamp(int(reset), UTC)
+            when = f"at {at:%H:%M} UTC"
+        super().__init__(f"GitHub's rate limit was reached; try again {when}.")
 
 
 class Gateway(Protocol):
@@ -387,7 +402,13 @@ def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
 
 
 class GraphQLGateway:
-    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._sleep = sleep
         if transport is None and "pytest" in sys.modules:
             raise RuntimeError("Tests must not reach GitHub; pass a fake transport.")
         self._client = httpx.AsyncClient(
@@ -407,21 +428,45 @@ class GraphQLGateway:
         return (await self._send(query, **variables))[0]
 
     async def _send(self, query: str, **variables: Any) -> tuple[dict[str, Any], httpx.Headers]:
-        """The query's data, and the response headers."""
+        """The query's data, and the response headers.
+
+        A rate-limited search waits out `Retry-After` and goes again once; a mutation never
+        goes twice, as GitHub may have applied it.
+        """
+        try:
+            return await self._post(query, variables)
+        except RateLimited as limit:
+            wait = limit.retry_after
+            if wait is None or query.lstrip().startswith("mutation"):
+                raise
+        await self._sleep(wait)
+        return await self._post(query, variables)
+
+    async def _post(
+        self, query: str, variables: dict[str, Any]
+    ) -> tuple[dict[str, Any], httpx.Headers]:
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}
             )
         except httpx.HTTPError as e:
             raise GitHubError(f"Couldn't reach GitHub: {e}") from e
+        headers = response.headers
+        if response.status_code == 429 or (
+            response.status_code == 403
+            and ("retry-after" in headers or headers.get("x-ratelimit-remaining") == "0")
+        ):
+            raise RateLimited(headers)
         if response.status_code == 401:
             raise GitHubError("GitHub rejected the `gh` token. Run `gh auth login`.")
         if response.is_error:
             raise GitHubError(f"GitHub returned HTTP {response.status_code}.")
         body = response.json()
         if errors := body.get("errors"):
+            if any(e.get("type") == "RATE_LIMITED" for e in errors):
+                raise RateLimited(headers)
             raise GitHubError("; ".join(e["message"] for e in errors))
-        return body["data"], response.headers
+        return body["data"], headers
 
     async def _nodes(
         self, query: str, connection: Callable[[dict[str, Any]], Any], **variables: Any
