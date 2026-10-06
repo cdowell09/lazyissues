@@ -81,8 +81,6 @@ class Mover:
         # Publishes an issue as it is now, whenever a move of it starts or ends. Each view
         # then applies confirmed moves to its store (`IssueStore.apply_moves`) and redraws.
         self.changed: Signal[Sequence[Issue]] = Signal(app, "moved")
-        self._viewer: str | None = None
-        self._options: dict[str, list[str]] = {}  # each project's Status options
 
     def pick(self, issue: Issue, highlight: Target | None = None) -> None:
         """Offer `issue`'s moves, starting on `highlight`, and make the one chosen."""
@@ -195,12 +193,10 @@ class Mover:
         GitHub couldn't say (the error shows)."""
         projects = {project for issue in issues if (project := self.rules.repo_of(issue).project)}
         try:
-            if self._viewer is None:
-                self._viewer, _ = await self.github.whoami()
-            for project in projects - self._options.keys():
-                self._options[project] = await self.github.project_status_options(project)
+            viewer, _ = await self.github.whoami()  # the gateway caches both for the session
+            options = {p: await self.github.project_status_options(p) for p in projects}
         except GitHubError as e:
             moving = issues[0].ref if len(issues) == 1 else f"{len(issues)} issues"
             self.app.notify(str(e), title=f"Can't move {moving}", severity="error", timeout=10)
             return None
-        return Planner(self.rules, self._viewer, self._options)
+        return Planner(self.rules, viewer, options)

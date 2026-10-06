@@ -7,7 +7,7 @@ from lazyissues.views.issue_list import IssueList
 class Team(IssueList):
     LABEL = "Team"
     EMPTY = "Add GitHub logins to `team` in config.toml."
-    viewer: str | None = None  # looked up on the first refresh
+    viewer: str | None = None  # set by the first `queries()`, for the grouping
 
     @property
     def members(self) -> list[str]:
@@ -17,8 +17,7 @@ class Team(IssueList):
         return [*roster, self.viewer]
 
     async def queries(self) -> list[str]:
-        if self.viewer is None:
-            self.viewer, _ = await self.github.whoami()
+        self.viewer, _ = await self.github.whoami()  # the gateway caches it
         return [f"is:issue assignee:{member}" for member in self.members]
 
     def grouping(self) -> Grouping:
