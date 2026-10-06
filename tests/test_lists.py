@@ -7,6 +7,7 @@ from textual.widgets import DataTable, TabbedContent
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.views import issue_list
 from lazyissues.views.issue_list import IssueList
 
 
@@ -171,8 +172,13 @@ async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
         draws: list[None] = []
         show = view.show
         monkeypatch.setattr(view, "show", lambda: draws.append(show()))
-        await pilot.press("slash", *"glow")
+        # A pause no keystroke can outlast, however slow the machine: typing never draws.
+        monkeypatch.setattr(issue_list, "SEARCH_PAUSE", 60)
+        await pilot.press("slash", *"glo")
         assert draws == []
+        # The pause after the last keystroke filters once.
+        monkeypatch.setattr(issue_list, "SEARCH_PAUSE", 0.05)
+        await pilot.press("w")
         await pilot.pause(0.3)
         assert len(draws) == 1
         assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
