@@ -165,11 +165,14 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
 
     def on_mount(self) -> None:
         self.mover.changed.subscribe(self, self.on_changed)
-        self.writer.changed.subscribe(self, lambda written: self.on_changed(written.detail.issue))
+        self.writer.changed.subscribe(
+            self, lambda writes: self.on_changed([w.detail.issue for w in writes])
+        )
         self.show_issue()
 
-    def on_changed(self, changed: Issue) -> None:
-        self.issues = [changed if issue.key == changed.key else issue for issue in self.issues]
+    def on_changed(self, changed: Sequence[Issue]) -> None:
+        latest = {issue.key: issue for issue in changed}
+        self.issues = [latest.get(issue.key, issue) for issue in self.issues]
         self.refresh_content()
 
     def show_issue(self) -> None:

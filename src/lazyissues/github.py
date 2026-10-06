@@ -90,7 +90,9 @@ class Gateway(Protocol):
 
     async def reopen_issue(self, repo: str, number: int) -> None: ...
 
-    async def assign(self, repo: str, number: int, login: str) -> None: ...
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
+        """Add `login` to the assignees, returning the issue as GitHub has it."""
+        ...
 
     # These writes return the issue's detail as GitHub has it once the write is done.
 
@@ -130,7 +132,7 @@ def gh_token() -> str:
 # Every query that builds an `Issue` selects these fields, so `_issue` can read them.
 _ISSUE_FIELDS = """
 fragment IssueFields on Issue {
-  number title url state closedAt
+  id number title url state closedAt
   repository { nameWithOwner }
   assignees(first: 10) { nodes { login } }
   labels(first: 20) { nodes { name } }
@@ -483,7 +485,10 @@ class GraphQLGateway:
         return nodes
 
     async def search_issues(self, query: str) -> list[Issue]:
-        return [_issue(node) for node in await self._nodes(_SEARCH, lambda d: d["search"], q=query)]
+        nodes = await self._nodes(_SEARCH, lambda d: d["search"], q=query)
+        for node in nodes:  # remember the IDs, so a write needs no lookup
+            self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+        return [_issue(node) for node in nodes]
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
@@ -602,12 +607,12 @@ class GraphQLGateway:
         fields = {"subjectId": await self._issue_id(repo, number), "body": body}
         return await self._write("addComment", fields, "subject")
 
-    async def assign(self, repo: str, number: int, login: str) -> None:
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
         issue_id = await self._issue_id(repo, number)
-        await self._mutate(
-            "addAssigneesToAssignable",
-            {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]},
-        )
+        fields = {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]}
+        returning = "assignable { ...IssueFields }"
+        data = await self._mutate("addAssigneesToAssignable", fields, returning, _ISSUE_FIELDS)
+        return _issue(data["assignable"])
 
     async def change_assignees(
         self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]

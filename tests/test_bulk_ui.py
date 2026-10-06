@@ -171,10 +171,12 @@ def options(app: App) -> list[str]:
 
 
 async def choose(pilot: Pilot, prompt: str) -> None:
-    """Take the option of the open bulk menu that reads `prompt`."""
+    """Take the option of the open bulk menu that reads `prompt`, or starts with it."""
     await until(pilot, lambda: isinstance(pilot.app.screen, BulkMenu))
-    await until(pilot, lambda: prompt in options(pilot.app))
-    pilot.app.screen.query_one(OptionList).highlighted = options(pilot.app).index(prompt)
+    await until(pilot, lambda: any(o.startswith(prompt) for o in options(pilot.app)))
+    shown = options(pilot.app)
+    choice = prompt if prompt in shown else next(o for o in shown if o.startswith(prompt))
+    pilot.app.screen.query_one(OptionList).highlighted = shown.index(choice)
     await pilot.press("enter")
 
 
@@ -340,3 +342,45 @@ async def test_selecting_updates_checkboxes_in_place_and_keeps_the_cursor(monkey
         assert rebuilds == []
         filters = app.query_one("#my-work #filters", Static)
         assert str(filters.render()) == "selected: 1"
+
+
+async def redraws_during_bulk(pilot: Pilot, monkeypatch, *prompts: str) -> int:
+    """Press A, B, take each of `prompts`, confirm, and count the list rebuilds until the
+    summary shows in the my-work list."""
+    rebuilds: list[None] = []
+    clear = IssueTable.clear
+
+    def counting(table: IssueTable, *args, **kwargs):
+        if table.parent and table.parent.id == "my-work":  # the tab in view
+            rebuilds.append(None)
+        return clear(table, *args, **kwargs)
+
+    monkeypatch.setattr(IssueTable, "clear", counting)
+    await ready(pilot)
+    await pilot.press("A", "B")
+    for prompt in prompts:
+        await choose(pilot, prompt)
+    await until(pilot, lambda: isinstance(pilot.app.screen, BulkConfirm))
+    rebuilds.clear()
+    await pilot.press("enter")
+    await until(pilot, lambda: isinstance(pilot.app.screen, BulkSummary))
+    return len(rebuilds)
+
+
+async def test_a_bulk_move_redraws_each_list_once(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        moved = await redraws_during_bulk(
+            pilot, monkeypatch, "Move", "Move to In Progress  (3 of 5 can)"
+        )
+        assert moved == 1
+        assert report(app)[0] == "Done (3)"
+
+
+async def test_a_bulk_assign_redraws_each_list_once(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        assigned = await redraws_during_bulk(pilot, monkeypatch, "Assign", "Assign to sam-reef")
+        assert assigned == 1
+        assert report(app)[0].startswith("Done (")
