@@ -536,7 +536,9 @@ class GraphQLGateway:
         return [option["name"] for option in (await self._project(project))["field"]["options"]]
 
     async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
-        issue_id, labels = await asyncio.gather(self._issue_id(repo, number), self._labels(repo))
+        issue_id, labels = await asyncio.gather(
+            self._issue_id(repo, number), self._labels_with(repo, names)
+        )
         ids = []
         for name in names:
             label = _named(labels, name)
@@ -553,7 +555,9 @@ class GraphQLGateway:
         await self._mutate("addLabelsToLabelable", {"labelableId": issue_id, "labelIds": ids})
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
-        issue_id, labels = await asyncio.gather(self._issue_id(repo, number), self._labels(repo))
+        issue_id, labels = await asyncio.gather(
+            self._issue_id(repo, number), self._labels_with(repo, names)
+        )
         ids = [label["id"] for label in labels if label["name"] in names]
         if ids:
             await self._mutate(
@@ -701,14 +705,31 @@ class GraphQLGateway:
         returning = f"{issue} {{ ...DetailFields }}"
         return _detail((await self._mutate(mutation, fields, returning, _DETAIL_FIELDS))[issue])
 
-    async def _labels(self, repo: str) -> list[dict[str, Any]]:
+    async def _labels(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
         """Every label of `repo`, with its ID; `add_labels` keeps the list current."""
-        if repo not in self._label_nodes:
+        if fresh or repo not in self._label_nodes:
             owner, name = repo.split("/")
             self._label_nodes[repo] = await self._nodes(
                 _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
             )
         return self._label_nodes[repo]
+
+    async def _read_again_on_miss(
+        self,
+        load: Callable[..., Awaitable[list[dict[str, Any]]]],
+        repo: str,
+        found: Callable[[list[dict[str, Any]]], bool],
+    ) -> list[dict[str, Any]]:
+        """The cached nodes `load` gives, or, if `found` misses in them (GitHub may have
+        changed since the session read them), a fresh read, once."""
+        nodes = await load(repo)
+        return nodes if found(nodes) else await load(repo, fresh=True)
+
+    async def _labels_with(self, repo: str, names: Sequence[str]) -> list[dict[str, Any]]:
+        """`repo`'s labels, read again once if any of `names` isn't among them."""
+        return await self._read_again_on_miss(
+            self._labels, repo, lambda nodes: all(_named(nodes, name) for name in names)
+        )
 
     async def _milestones(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
         """Every open milestone of `repo`, soonest due first, with its ID."""
@@ -728,9 +749,10 @@ class GraphQLGateway:
     async def _milestone_id(self, repo: str, milestone: str | None) -> str | None:
         if milestone is None:
             return None
-        ids = {m["title"]: m["id"] for m in await self._milestones(repo)}
-        if milestone not in ids:  # made on GitHub since we read them
-            ids = {m["title"]: m["id"] for m in await self._milestones(repo, fresh=True)}
+        nodes = await self._read_again_on_miss(
+            self._milestones, repo, lambda nodes: any(m["title"] == milestone for m in nodes)
+        )
+        ids = {m["title"]: m["id"] for m in nodes}
         return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
