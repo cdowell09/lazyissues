@@ -77,8 +77,8 @@ def gateway(github: GitHub) -> GraphQLGateway:
     return GraphQLGateway("token", transport=httpx.MockTransport(github))
 
 
-async def test_add_label_uses_the_repos_label_spelled_any_way(gateway, github):
-    await gateway.add_label("o/r", 1, "In Progress")
+async def test_add_labels_uses_the_repos_label_spelled_any_way(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
 
     assert github.lookups == [
         {"owner": "o", "name": "r", "number": 1},
@@ -87,8 +87,8 @@ async def test_add_label_uses_the_repos_label_spelled_any_way(gateway, github):
     assert github.mutations == [("addLabelsToLabelable", {"labelableId": "I1", "labelIds": ["L2"]})]
 
 
-async def test_add_label_creates_a_label_the_repo_lacks(gateway, github):
-    await gateway.add_label("o/r", 1, "In Review")
+async def test_add_labels_creates_a_label_the_repo_lacks(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Review"])
 
     assert github.mutations == [
         ("createLabel", {"repositoryId": "R1", "name": "In Review", "color": "ededed"}),
@@ -175,3 +175,64 @@ async def test_assign_looks_up_the_user(gateway, github):
     ]
     with pytest.raises(GitHubError, match="No GitHub user nobody"):
         await gateway.assign("o/r", 1, "nobody")
+
+
+def requests(github: GitHub) -> int:
+    return len(github.lookups) + len(github.mutations)
+
+
+async def test_a_label_move_sends_four_requests_and_a_repeat_three(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
+    await gateway.remove_labels("o/r", 1, ["todo"])
+    assert requests(github) == 4  # issue ID, labels, add, remove
+
+    github.repositories[("o", "r", 2)] = repository("I2")
+    before = requests(github)
+    await gateway.add_labels("o/r", 2, ["In Progress"])
+    await gateway.remove_labels("o/r", 2, ["todo"])
+    assert requests(github) - before == 3  # issue ID, add, remove
+    assert github.mutations[-2:] == [
+        ("addLabelsToLabelable", {"labelableId": "I2", "labelIds": ["L2"]}),
+        ("removeLabelsFromLabelable", {"labelableId": "I2", "labelIds": ["L3"]}),
+    ]
+
+
+async def test_a_label_created_by_one_move_serves_the_next_without_a_refetch(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Review"])
+    before = requests(github)
+    github.repositories[("o", "r", 2)] = repository("I2")
+    await gateway.add_labels("o/r", 2, ["In Review"])
+
+    assert github.mutations[-1] == (
+        "addLabelsToLabelable",
+        {"labelableId": "I2", "labelIds": ["L-new"]},
+    )
+    assert requests(github) - before == 2  # issue ID and the add: no label fetch, no create
+
+
+async def test_several_labels_go_in_one_request(gateway, github):
+    await gateway.add_labels("o/r", 1, ["bug", "In Progress", "In Review"])
+
+    assert [name for name, _ in github.mutations] == ["createLabel", "addLabelsToLabelable"]
+    assert github.mutations[-1][1]["labelIds"] == ["L1", "L2", "L-new"]
+
+
+async def test_an_issues_id_is_looked_up_once(gateway, github):
+    await gateway.reopen_issue("o/r", 1)
+    await gateway.reopen_issue("o/r", 1)
+
+    assert len(github.lookups) == 1
+
+
+async def test_a_user_id_is_looked_up_once(gateway, github):
+    await gateway.assign("o/r", 1, "sam")
+    await gateway.assign("o/r", 1, "sam")
+
+    assert sum("login" in lookup for lookup in github.lookups) == 1
+
+
+async def test_a_board_is_fetched_once(gateway, github):
+    await gateway.project_status_options("o/1")
+    await gateway.add_to_project("o/r", 1, "o/1")
+
+    assert sum("number" in lookup and "login" in lookup for lookup in github.lookups) == 1

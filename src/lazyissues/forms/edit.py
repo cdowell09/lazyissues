@@ -61,8 +61,8 @@ class EditForm(Form):
             changes["milestone"] = draft.milestone
         if not (add or remove or changes):
             return None
-        for label in add:
-            await self.github.add_label(repo, number, label)
+        if add:
+            await self.github.add_labels(repo, number, add)
         if remove:
             await self.github.remove_labels(repo, number, remove)
         if changes:
