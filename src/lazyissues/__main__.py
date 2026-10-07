@@ -15,6 +15,9 @@ from lazyissues.store import cache_dir
 def main() -> None:
     parser = argparse.ArgumentParser(description="A fast terminal UI for GitHub Issues.")
     parser.add_argument("--demo", action="store_true", help="run on made-up data, no GitHub")
+    parser.add_argument(
+        "--setup", action="store_true", help="rerun setup, starting from the current config"
+    )
     args = parser.parse_args()
 
     if args.demo:
@@ -28,11 +31,19 @@ def main() -> None:
         token = gh_token()
     except (ConfigError, GitHubError) as e:
         sys.exit(f"lazyissues: {e}")
-    if config is None:
+    if config is None or args.setup:
         # Each app runs its own event loop, so each gets its own gateway (and HTTP client).
-        config = SetupApp(GraphQLGateway(token), path).run()
+        current = config
+        config = SetupApp(GraphQLGateway(token), path, current).run()
         if config is None:
-            sys.exit("lazyissues: setup quit before saving. Run lazyissues again to finish it.")
+            sys.exit(
+                "lazyissues: setup quit before saving. "
+                + (
+                    "Run lazyissues again to finish it."
+                    if current is None
+                    else f"{path} is unchanged."
+                )
+            )
     LazyIssuesApp(config, GraphQLGateway(token), cache_dir(), config_path=path).run()
 
 

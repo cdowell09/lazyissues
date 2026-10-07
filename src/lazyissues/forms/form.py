@@ -9,7 +9,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -112,7 +112,8 @@ class Form(ModalScreen[Written | None]):
 
     A subclass composes its `fields`, can `load` what they offer from GitHub, and
     `save`s. A failed load or save shows the error and keeps the form open, so nothing
-    typed is lost. Closing without a change returns None.
+    typed is lost. Closing without a change returns None, and asks first when the
+    fields changed since they first loaded.
     """
 
     REGROUPS: ClassVar[bool] = True  # whether its writes can change a tab's issues
@@ -153,6 +154,7 @@ class Form(ModalScreen[Written | None]):
         self.heading = heading
         self.ready = False  # loaded, so the fields hold what GitHub offers
         self.saving = False
+        self.loaded: list[object] | None = None  # the fields' values once first loaded
         self.text_field: TextField | None = None  # the one `Ctrl+E` edits
 
     def fields(self) -> ComposeResult:
@@ -203,7 +205,18 @@ class Form(ModalScreen[Written | None]):
             self.show_message(f"Couldn't load: {e}", error=True)
             return
         self.ready = True
+        if self.loaded is None:  # not on a reload, which a changed field can start
+            self.loaded = self.values()
         self.show_message("")
+
+    def values(self) -> list[object]:
+        """What the fields hold; a picker's filter text is not part of the draft."""
+        return [
+            *(i.value for i in self.query(Input) if not isinstance(i.parent, Picker)),
+            *(t.text for t in self.query(TextArea)),
+            *(p.selected for p in self.query(Picker)),
+            *(s.value for s in self.query(Select)),
+        ]
 
     def show_message(self, text: str, *, error: bool = False) -> None:
         message = self.query_one("#message", Static)
@@ -229,8 +242,17 @@ class Form(ModalScreen[Written | None]):
 
     def action_cancel(self) -> None:
         # A save on its way may already have reached GitHub; close with its result.
-        if not self.saving:
+        if self.saving:
+            return
+        if self.loaded is None or self.values() == self.loaded:
             self.dismiss(None)
+            return
+
+        def discard(yes: bool | None) -> None:
+            if yes:
+                self.dismiss(None)
+
+        self.app.push_screen(ConfirmDiscard(), discard)
 
     def on_text_field_submitted(self) -> None:
         self.action_submit()
@@ -265,6 +287,34 @@ class Form(ModalScreen[Written | None]):
             )
         field.text = text
         field.focus()
+
+
+class ConfirmDiscard(ModalScreen[bool]):
+    """Asks before a changed form closes; True discards the changes."""
+
+    DEFAULT_CSS = """
+    ConfirmDiscard { align: center middle; }
+    ConfirmDiscard > Vertical {
+        width: auto; height: auto; padding: 1 2; background: $surface; border: round $warning;
+    }
+    ConfirmDiscard Horizontal { height: auto; margin-top: 1; }
+    ConfirmDiscard Button { margin-right: 1; }
+    """
+    AUTO_FOCUS = "#keep"
+    BINDINGS = [
+        Binding("y", "dismiss(True)", "Discard"),
+        Binding("n,escape", "dismiss(False)", "Keep editing"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Discard your changes? (y/n)")
+            with Horizontal():
+                yield Button("Discard", variant="warning", id="discard", compact=True)
+                yield Button("Keep editing", id="keep", compact=True)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "discard")
 
 
 def label(text: str) -> Label:

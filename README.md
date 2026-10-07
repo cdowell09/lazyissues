@@ -153,11 +153,13 @@ Before anything is sent, a confirmation lists the issues that will change and th
 - **Create** starts in the repo you last created in, else the selected issue's. Its status is set as a move once the issue exists: the status label in a label-backed repo, or the project's Status in a project-backed one. If GitHub rejects that, the issue is still created and the rejected move stays on screen.
 - **Edit** starts from the issue's cached detail when there is one (else GitHub's copy) and sends only the fields you changed, so edits made elsewhere meanwhile are kept.
 
-If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
+If you changed anything, `Esc` asks before discarding it: `y` discards, `n` or `Esc` keeps editing. A form whose save is already on its way closes once GitHub answers. If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
 
 ## Cache
 
 The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup only the tab you start on refreshes; each other tab refreshes the first time you open it. Deleting it is always safe.
+
+The line under each list says how old its issues are (`updated 4m ago`), from startup on. If a refresh fails, the list keeps its cached issues and the line says so and when they were loaded (`refresh failed · cached 09:12`) until a refresh succeeds.
 
 ## Rate limits
 
@@ -184,7 +186,9 @@ The first time you run `lazyissues` there is no config yet, so it starts setup. 
 
 If your `gh` token lacks the `project` scope, setup says so and offers labels only. Run `gh auth refresh -s project`, then start lazyissues again to use project boards.
 
-Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`). To run setup again, delete or rename `config.toml`.
+Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`).
+
+To change your repos, status sources or statuses later, run `lazyissues --setup`. It starts from your current config: its repos are checked (other repos where you have open issues are offered unchecked), each keeps its status source, the labels that are statuses are checked, and the statuses keep their order, active marks and move keys. A status a source now offers that the config doesn't list joins the end. Saving keeps your team roster, saved filters, preferences, other settings and the comments in `config.toml`; quitting with `ctrl+q` leaves it unchanged. Without a config, `--setup` is the same as a first run.
 
 ## Configuration
 
