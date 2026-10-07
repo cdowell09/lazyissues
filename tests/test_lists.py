@@ -1,6 +1,7 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
 import webbrowser
+from datetime import UTC, datetime, timedelta
 
 from listed import drawn, plain, show_tab
 from textual.pilot import Pilot
@@ -49,11 +50,11 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
         # Issues indent under their group; a fold arrow has a column of its own.
         assert drawn(table(app, "team")) == [
             "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
+            "    tidepool#12",  # the most recently updated first
+            "    tidepool#15 ⚠",
             "    lanternfish#4",
-            "    tidepool#12",
             "  ▾ lanternfish#9",  # a parent, unfolded
             "    └ lanternfish#11",  # a sub-issue under its parent
-            "    tidepool#15 ⚠",
             "▾ sam-reef (2)",  # one active issue
             "    lanternfish#4",  # shared with the viewer
             "    lanternfish#9 → lanternfish#7",  # its parent is in another group
@@ -146,7 +147,7 @@ async def test_enter_opens_the_detail_from_any_list_tab():
         await pilot.press("down", "enter")
         await pilot.pause()
         assert isinstance(app.screen, IssueDetailScreen)
-        assert app.screen.issues[app.screen.index].key == "octo-dev/lanternfish#4"
+        assert app.screen.issues[app.screen.index].key == "octo-dev/tidepool#12"
 
 
 async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it():
@@ -154,19 +155,20 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
     async with app.run_test() as pilot:
         await settled(pilot)
         await open_tab(pilot, "team")
-        await pilot.press("down", "down", "down", "down", "z")  # on lanternfish#11
-        assert drawn(table(app, "team"))[:5] == [
+        await pilot.press("down", "down", "down", "down", "down", "z")  # on lanternfish#11
+        assert drawn(table(app, "team"))[:6] == [
             "▾ octo-dev (5)",
-            "    lanternfish#4",
             "    tidepool#12",
-            "  ▸ lanternfish#9",
             "    tidepool#15 ⚠",
+            "    lanternfish#4",
+            "  ▸ lanternfish#9",
+            "▾ sam-reef (2)",
         ]
         team = table(app, "team")
         assert drawn(team)[team.cursor_row] == "  ▸ lanternfish#9"
 
         await pilot.press("z")  # on the parent unfolds it
-        assert drawn(table(app, "team"))[4] == "    └ lanternfish#11"
+        assert drawn(table(app, "team"))[5] == "    └ lanternfish#11"
 
 
 async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
@@ -189,12 +191,29 @@ async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
         assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
 
 
+async def test_the_demo_shows_how_long_ago_each_issue_changed_latest_first():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(160, 40)) as pilot:
+        await show_tab(pilot, "team")
+        listed = table(app, "team")
+        rows = [listed.get_row_at(i) for i in range(6)]
+        assert [(str(row[1]).strip(), str(row[-1])) for row in rows] == [
+            ("▾ octo-dev (5)", ""),
+            ("tidepool#12", "5m"),
+            ("tidepool#15 ⚠", "40m"),
+            ("lanternfish#4", "7h"),
+            ("▾ lanternfish#9", "2d"),
+            ("└ lanternfish#11", "3d"),  # older, but under its parent
+        ]
+
+
 LONG = "A title long enough to push every column after it off an eighty-column terminal"
 
 
 def long_titled_app() -> LazyIssuesApp:
     url = "https://github.com/o/r/issues/1"
-    issue = Issue("o/r", 1, LONG, url, ("me",), ("todo", "bug"))
+    updated = (datetime.now(UTC) - timedelta(days=3, hours=1)).isoformat()
+    issue = Issue("o/r", 1, LONG, url, ("me",), ("todo", "bug"), updated_at=updated)
     config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")])
     return LazyIssuesApp(config, FakeGitHub(viewer="me", issues=[issue]))
 
@@ -211,8 +230,8 @@ async def test_at_80_columns_every_column_shows_and_a_long_title_ends_in_an_elli
     async with app.run_test(size=(80, 24)) as pilot:
         await settled(pilot)
         headings, row = shown(app)
-        assert headings.split() == ["Issue", "Title", "Status", "Assignees", "Labels"]
-        assert row.rstrip().split("  ")[-1].strip() == "todo, bug"  # the last column, whole
+        assert headings.split() == ["Issue", "Title", "Status", "Assignees", "Labels", "Updated"]
+        assert row.split()[-3:] == ["todo,", "bug", "3d"]  # the last columns, whole
         title = row.split("r#1")[1].split("…")[0].strip()
         assert LONG.startswith(title) and len(title) > 10  # cut short, with room to read
 
@@ -227,7 +246,7 @@ async def test_resizing_refits_the_columns():
         await pilot.resize_terminal(80, 24)
         await pilot.pause()
         assert LONG not in shown(app)[1] and "…" in shown(app)[1]
-        assert shown(app)[1].rstrip().endswith("todo, bug")
+        assert shown(app)[1].rstrip().endswith("todo, bug  3d")
 
 
 # Natural widths of the checkbox, Issue, Title, Status, Assignees and Labels columns.

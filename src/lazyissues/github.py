@@ -136,7 +136,7 @@ def gh_token() -> str:
 # Every query that builds an `Issue` selects these fields, so `_issue` can read them.
 _ISSUE_FIELDS = """
 fragment IssueFields on Issue {
-  id number title url state closedAt
+  id number title url state closedAt updatedAt
   repository { nameWithOwner }
   assignees(first: 10) { nodes { login } }
   labels(first: 20) { nodes { name } }
@@ -386,6 +386,7 @@ def _issue(node: dict[str, Any]) -> Issue:
         labels=tuple(label["name"] for label in node["labels"]["nodes"]),
         closed=node["state"] == "CLOSED",
         closed_at=node["closedAt"],
+        updated_at=node["updatedAt"],
         milestone=node["milestone"] and node["milestone"]["title"],
         parent=_parent_key(node),
         project_statuses=_project_statuses(node["projectItems"]["nodes"]),

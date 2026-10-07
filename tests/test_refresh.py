@@ -200,14 +200,15 @@ async def test_r_refreshes_and_keeps_the_selected_issue_when_rows_move():
         await pilot.app.workers.wait_for_complete()
         await select(pilot, "octo-dev/tidepool#12")
 
-        github.issues.reverse()
-        github.issues.insert(0, Issue("octo-dev/tidepool", 20, "New", "u", (demo.VIEWER,)))
+        now = datetime.now(UTC).isoformat()
+        new = Issue("octo-dev/tidepool", 20, "New", "u", (demo.VIEWER,), updated_at=now)
+        github.issues.append(new)  # the latest, so the rows below it move down
         await refreshed(pilot)
         assert listed(app) == [
             "octo-dev/tidepool#20",
             "octo-dev/lanternfish#9",
-            "octo-dev/lanternfish#4",
             "octo-dev/tidepool#12",
+            "octo-dev/lanternfish#4",
             "octo-dev/tidepool#15",
             "octo-dev/lanternfish#11",
         ]

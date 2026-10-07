@@ -108,7 +108,8 @@ def by_status(rules: StatusRules) -> Grouping:
 
 def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
     """A group per member, even with nothing assigned, ordered by how many active
-    issues each has; within a member, active issues first, then status order."""
+    issues each has; within a member, active issues first, then status order, among
+    issues `visible_groups` can't order by update time."""
 
     def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
         ordered = sorted(
@@ -130,7 +131,7 @@ def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
 
 def by_milestone(rules: StatusRules, milestones: list[Milestone]) -> Grouping:
     """A group per milestone, in the order given, even with no issues; issues in status
-    order."""
+    order, among those `visible_groups` can't order by update time."""
 
     def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
         ordered = _in_status_order(rules, issues, status_of)
@@ -166,6 +167,9 @@ def visible_groups(
     for name, members in grouping(matching, lambda issue: statuses[issue.key]):
         if not members and not _contains(name, state.search):
             continue  # an empty member group shows unless a search names someone else
+        # Most recently updated first. Stamps are ISO 8601 in UTC, so they sort as text;
+        # an issue without one sorts last.
+        members = sorted(members, key=lambda i: i.updated_at or "", reverse=True)
         folded = name in state.folded
         rows = [] if folded else _nested(members, state.folded, statuses)
         groups.append(Group(name, members, rows, folded))

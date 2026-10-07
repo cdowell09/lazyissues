@@ -4,6 +4,7 @@ import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from typing import Any
 
 from lazyissues.github import GitHubError
 from lazyissues.models import (
@@ -62,7 +63,7 @@ class FakeGitHub:
         return list(self.assignable.get(self._resolve(repo), []))
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
-        self._writable(repo, number)
+        self._change(self._writable(repo, number))
         detail = await self.issue_detail(repo, number)
         event = Event(self.viewer, datetime.now(UTC), "commented", body)
         self.details[detail.issue.key] = replace(detail, activity=(*detail.activity, event))
@@ -77,7 +78,7 @@ class FakeGitHub:
         issue = self.issues[index]
         kept = [login for login in issue.assignees if login not in remove]
         added = [login for login in add if login not in kept]
-        self.issues[index] = replace(issue, assignees=(*kept, *added))
+        self._change(index, assignees=(*kept, *added))
         return await self.issue_detail(repo, number)
 
     async def create_issue(
@@ -94,7 +95,9 @@ class FakeGitHub:
         self._check(repo, labels, milestone)
         number = max((issue.number for issue in self.issues if issue.repo == repo), default=0) + 1
         url = f"https://github.com/{repo}/issues/{number}"
-        issue = Issue(repo, number, title, url, labels=tuple(labels), milestone=milestone)
+        issue = Issue(
+            repo, number, title, url, labels=tuple(labels), milestone=milestone, updated_at=_now()
+        )
         self.issues.append(issue)
         self.details[issue.key] = IssueDetail(issue, body=body)
         return await self.issue_detail(repo, number)
@@ -103,8 +106,8 @@ class FakeGitHub:
         index = self._writable(repo, number)
         self._check(repo, (), changes.get("milestone"))
         detail = await self.issue_detail(repo, number)
-        self.issues[index] = replace(
-            self.issues[index],
+        self._change(
+            index,
             title=changes.get("title", detail.issue.title),
             milestone=changes.get("milestone", detail.issue.milestone),
         )
@@ -129,26 +132,26 @@ class FakeGitHub:
     async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)
         repo_labels = self.labels.setdefault(repo, [])
+        labels = list(self.issues[index].labels)
         for name in names:
             label = next((lb for lb in repo_labels if normalize(lb) == normalize(name)), None)
             if label is None:
                 label = name
                 repo_labels.append(label)
-            issue = self.issues[index]
-            if label not in issue.labels:
-                self.issues[index] = replace(issue, labels=(*issue.labels, label))
+            if label not in labels:
+                labels.append(label)
+        self._change(index, labels=tuple(labels))
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)
-        issue = self.issues[index]
-        self.issues[index] = replace(
-            issue, labels=tuple(label for label in issue.labels if label not in names)
-        )
+        labels = self.issues[index].labels
+        self._change(index, labels=tuple(label for label in labels if label not in names))
 
     async def add_to_project(self, repo: str, number: int, project: str) -> None:
         index = self._writable(repo, number)
         await self.project_status_options(project)
         self.project_items.add((project, self.issues[index].key))
+        self._change(index)
 
     async def set_project_status(self, repo: str, number: int, project: str, status: str) -> None:
         index = self._writable(repo, number)
@@ -160,29 +163,35 @@ class FakeGitHub:
         if option is None:
             raise GitHubError(f"The Status field has no option {status}.")
         statuses = issue.project_statuses | {project: option}
-        self.issues[index] = replace(issue, project_statuses=statuses)
+        self._change(index, project_statuses=statuses)
 
     async def close_issue(
         self, repo: str, number: int, reason: CloseReason, duplicate_of: str | None = None
     ) -> None:
-        key = self.issues[self._writable(repo, number)].key
+        index = self._writable(repo, number)
+        key = self.issues[index].key
         if duplicate_of is not None:
             self._index(*parse_key(duplicate_of))
         self.closed.add(key)
+        self._change(index)
         self.close_reasons[key] = (reason, duplicate_of)
 
     async def reopen_issue(self, repo: str, number: int) -> None:
         index = self._writable(repo, number)
         self.closed.discard(self.issues[index].key)
-        self.issues[index] = replace(self.issues[index], closed_at=None)
+        self._change(index, closed_at=None)
 
     async def assign(self, repo: str, number: int, login: str) -> Issue:
         index = self._writable(repo, number)
         self._assignable(repo, login)
         issue = self.issues[index]
         if login not in issue.assignees:
-            self.issues[index] = replace(issue, assignees=(*issue.assignees, login))
+            self._change(index, assignees=(*issue.assignees, login))
         return self._current(self.issues[index])
+
+    def _change(self, index: int, **changes: Any) -> None:
+        """Apply a write to an issue, stamping it updated now, as GitHub does."""
+        self.issues[index] = replace(self.issues[index], updated_at=_now(), **changes)
 
     def _assignable(self, repo: str, login: str) -> None:
         """Refuse a login GitHub wouldn't assign to issues in `repo`, as the real one does."""
@@ -267,3 +276,8 @@ class FakeGitHub:
     def _closed_on(self, issue: Issue) -> str:
         """The UTC date `closed:` compares; one closed via `closed` this session is today."""
         return (issue.closed_at or datetime.now(UTC).isoformat())[:10]
+
+
+def _now() -> str:
+    """The time now as GitHub stamps it: "2026-10-01T09:00:00Z"."""
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")

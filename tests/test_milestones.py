@@ -33,10 +33,10 @@ async def test_lists_each_repos_milestones_with_progress_and_issues_by_status():
         "tidepool / v1.0 (1)  ░░░░░░░░░░ 0/1",
         "tidepool#18",
         "lanternfish / v1.0 (4)  ██░░░░░░░░ 1/5",  # same title, another repo
+        "lanternfish#4",  # the most recently updated first
         "lanternfish#9",  # a parent, its sub-issues under it
         "lanternfish#7",
         "lanternfish#11",
-        "lanternfish#4",
     ]
 
 
@@ -45,10 +45,10 @@ async def test_sub_issues_hang_off_their_parent_on_tree_lines():
     async with app.run_test() as pilot:
         await show_tab(pilot, "milestones")
         assert drawn(app.query_one("#milestones DataTable", DataTable))[-4:] == [
+            "    lanternfish#4",
             "  ▾ lanternfish#9",  # a parent, unfolded
             "    ├ lanternfish#7",  # another sub-issue of #9 follows
             "    └ lanternfish#11",  # the last
-            "    lanternfish#4",
         ]
 
 

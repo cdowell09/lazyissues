@@ -160,15 +160,15 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
     async with app.run_test() as pilot:
         await settled(pilot)
         await click_tab(pilot, "Team")
-        assert first_cell(app, 3, "team") == "  ▾ lanternfish#9"
-        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
+        assert first_cell(app, 4, "team") == "  ▾ lanternfish#9"
+        assert first_cell(app, 5, "team") == "    └ lanternfish#11"
 
         arrow = ISSUE_TEXT + len(INDENT)  # under its group's name
-        await click_row(pilot, 3, x=arrow, view="team")
-        assert first_cell(app, 3, "team") == "  ▸ lanternfish#9"
-        assert first_cell(app, 4, "team") == "    tidepool#15 ⚠"
-        await click_row(pilot, 3, x=arrow, view="team")
-        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
+        await click_row(pilot, 4, x=arrow, view="team")
+        assert first_cell(app, 4, "team") == "  ▸ lanternfish#9"
+        assert first_cell(app, 5, "team") == "▾ sam-reef (2)"
+        await click_row(pilot, 4, x=arrow, view="team")
+        assert first_cell(app, 5, "team") == "    └ lanternfish#11"
         assert not isinstance(app.screen, IssueDetailScreen)
 
 

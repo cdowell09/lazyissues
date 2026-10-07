@@ -19,15 +19,17 @@ def _issue(
     number: int,
     title: str,
     *assignees: str,
+    updated: timedelta,  # how long ago it last changed
     labels: tuple[str, ...] = (),
     project_status: str | None = None,
     closed_days_ago: int | None = None,
     milestone: str | None = None,
     parent: str | None = None,
 ):
+    now = datetime.now(UTC)
     closed_at = None
     if closed_days_ago is not None:
-        closed_at = (datetime.now(UTC) - timedelta(days=closed_days_ago)).isoformat()
+        closed_at = (now - timedelta(days=closed_days_ago)).isoformat()
     return Issue(
         repo=repo,
         number=number,
@@ -38,6 +40,7 @@ def _issue(
         project_statuses={PROJECT: project_status} if project_status else {},
         closed=closed_at is not None,
         closed_at=closed_at,
+        updated_at=(now - updated).isoformat(),
         milestone=milestone,
         parent=parent,
     )
@@ -69,6 +72,7 @@ def github() -> FakeGitHub:
             12,
             "Sync stalls when the tide table is empty",
             VIEWER,
+            updated=timedelta(minutes=5),
             labels=("bug", "in-progress"),
             milestone=v04,
         ),
@@ -77,16 +81,25 @@ def github() -> FakeGitHub:
             15,
             "Add a weekly digest of high tides",
             VIEWER,
+            updated=timedelta(minutes=40),
             labels=("enhancement", "todo", "in-review"),  # two status labels
             milestone=v04,
         ),
-        _issue(tide, 18, "Document the import format", labels=("documentation",), milestone=v10),
+        _issue(
+            tide,
+            18,
+            "Document the import format",
+            updated=timedelta(hours=3),
+            labels=("documentation",),
+            milestone=v10,
+        ),
         _issue(
             lantern,
             4,
             "Lantern glow ignores the dark theme",
             VIEWER,
             "sam-reef",
+            updated=timedelta(hours=7),
             project_status="In Progress",
             milestone=v10,
         ),
@@ -95,6 +108,7 @@ def github() -> FakeGitHub:
             7,
             "Cache fish sightings between runs",
             "sam-reef",
+            updated=timedelta(days=1),
             labels=("ready-for-human",),
             project_status="Todo",
             milestone=v10,
@@ -106,6 +120,7 @@ def github() -> FakeGitHub:
             9,
             "Count lanterns per reef",
             VIEWER,
+            updated=timedelta(days=2),
             labels=("ready-for-human",),
             milestone=v10,
         ),
@@ -114,6 +129,7 @@ def github() -> FakeGitHub:
             11,
             "Wait for the depth sensor API",
             VIEWER,
+            updated=timedelta(days=3),
             project_status="Blocked",
             milestone=v10,
             parent=COUNTING,
@@ -122,6 +138,7 @@ def github() -> FakeGitHub:
             lantern,
             13,
             "Pick a palette for night dives",
+            updated=timedelta(days=6),
             labels=("needs-triage",),
             project_status="Todo",
         ),
@@ -130,11 +147,20 @@ def github() -> FakeGitHub:
             10,
             "Tide chart renders upside down",
             VIEWER,
+            updated=timedelta(days=2),
             labels=("bug",),
             closed_days_ago=2,
             milestone=v04,
         ),
-        _issue(lantern, 2, "Import the old lantern log", VIEWER, closed_days_ago=40, milestone=v10),
+        _issue(
+            lantern,
+            2,
+            "Import the old lantern log",
+            VIEWER,
+            updated=timedelta(days=40),
+            closed_days_ago=40,
+            milestone=v10,
+        ),
     ]
     board = Project(PROJECT, "Lanternfish board", ("Todo", "In Progress", "Blocked", "Done"))
     return FakeGitHub(

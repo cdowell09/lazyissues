@@ -52,7 +52,7 @@ from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Write
 # The first column is each row's checkbox, a column rather than Textual's row label: a
 # redraw drops the label column until the table is next idle, and a click in between
 # landed on the cell beside it. Columns stay put.
-COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
+COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels", "Updated")
 TITLE, MIN_TITLE = COLUMNS.index("Title"), 10  # the column that fills the width (`fit`)
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
 SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
@@ -425,6 +425,11 @@ class IssueList(IssueActions, Widget):
             status.name,
             ", ".join(issue.assignees),
             ", ".join(issue.labels),
+            # ponytail: drawn with the rows, so it ages only when the list redraws (a
+            # refresh, search or move); tick it with the data's age if that falls short.
+            age(datetime.now(UTC) - datetime.fromisoformat(issue.updated_at))
+            if issue.updated_at
+            else "",
         )
 
     def _show_filters(self) -> None:

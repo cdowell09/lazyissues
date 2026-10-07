@@ -39,9 +39,9 @@ A saved filter is a name and a query in [GitHub's issue search syntax](https://d
 
 In the sidebar, `n` adds a filter, `e` edits the highlighted one and `x` deletes it after you confirm; each change is saved to `config.toml` at once, keeping your comments. Each filter's results keep their own snapshot, search and folds.
 
-In every tab, issues are indented under their group's header, and a sub-issue whose parent is in the same group hangs under it on a tree line (`├ lanternfish#7`, `└ lanternfish#11`); otherwise its row leads with the parent, dimmed (`lanternfish#9 → lanternfish#7`). A parent's `▾`/`▸` sits in a column of its own, so every issue number lines up. `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
+In every tab, issues are indented under their group's header, most recently updated first, and the Updated column says how long ago each one changed (`5m`, `3h`, `2d`). A sub-issue whose parent is in the same group hangs under it on a tree line (`├ lanternfish#7`, `└ lanternfish#11`); otherwise its row leads with the parent, dimmed (`lanternfish#9 → lanternfish#7`). A parent's `▾`/`▸` sits in a column of its own, so every issue number lines up. `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
 
-Lists fit the terminal and refit when you resize it: Title takes the room the other columns leave, and a title cut short ends in `…`, so Status, Assignees and Labels stay on screen even at 80 columns. On a terminal narrower than 100 columns, the detail opens full screen.
+Lists fit the terminal and refit when you resize it: Title takes the room the other columns leave, and a title cut short ends in `…`, so Status, Assignees, Labels and Updated stay on screen even at 80 columns. On a terminal narrower than 100 columns, the detail opens full screen.
 
 ## Statuses
 

@@ -38,7 +38,7 @@ async def test_my_work_says_when_nothing_is_assigned():
     app = LazyIssuesApp(demo.config(), FakeGitHub(viewer="nobody"))
     async with app.run_test() as pilot:
         await pilot.app.workers.wait_for_complete()
-        assert rows(app) == [["", "No open issues are assigned to you.", "", "", ""]]
+        assert rows(app) == [["", "No open issues are assigned to you.", "", "", "", ""]]
 
 
 @pytest.fixture
