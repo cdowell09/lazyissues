@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 from textual.widgets import Input, SelectionList, Static
 
 from lazyissues import config as config_module
 from lazyissues import demo
-from lazyissues.config import Config, Repo, Status
+from lazyissues.config import Config, Preferences, Repo, Status
 from lazyissues.discovery import STARTER_FILTERS
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
@@ -150,3 +152,94 @@ async def test_setup_can_retry_when_github_is_unreachable(tmp_path):
         await pilot.press("r")
         await settle(pilot)
         assert options(app) == [("octo-dev/lanternfish", True), ("octo-dev/tidepool", True)]
+
+
+async def test_rerunning_setup_starts_from_the_config_and_keeps_the_rest(tmp_path):
+    path = tmp_path / "config.toml"
+    current = replace(
+        demo.config(),
+        repos=[Repo("octo-dev/tidepool")],
+        statuses=[Status("Todo"), Status("In Progress", active=True, key="p")],
+        done_window_days=7,
+        pinned_milestones=["octo-dev/tidepool/v1.0"],
+        preferences=Preferences(show_done=True, start_tab="Team", theme="nord"),
+    )
+    config_module.save(current, path)
+    # Hand edits: a comment, and a setting only the file sets.
+    text = path.read_text(encoding="utf-8")
+    path.write_text(f"# my notes\ndone_window_days = 7\n{text}", encoding="utf-8")
+
+    app = SetupApp(demo.github(), path, current)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        # The config's repos are checked; other repos with my issues are offered.
+        assert options(app) == [("octo-dev/tidepool", True), ("octo-dev/lanternfish", False)]
+        await click(pilot, "#next")
+        # Tidepool's labels that are config statuses start checked.
+        assert options(app) == [
+            ("bug", False),
+            ("documentation", False),
+            ("enhancement", False),
+            ("in-progress", True),
+            ("in-review", False),
+            ("todo", True),
+        ]
+        await click(pilot, "#next")
+        # The config's order, names, active statuses and keys.
+        assert options(app) == [("Todo", False), ("In Progress", True)]
+        assert "(p)" in str(app.screen.query_one(SelectionList).get_option_at_index(1).prompt)
+        await click(pilot, "#save")
+
+    assert app.return_value == current
+    assert config_module.load(path) == current
+    assert path.read_text(encoding="utf-8").startswith("# my notes\ndone_window_days = 7\n")
+
+
+async def rerun_and_save(github: FakeGitHub, path) -> tuple[SetupApp, str]:
+    """Rerun setup from the demo config, save unchanged, and return the Repos screen's text."""
+    app = SetupApp(github, path, demo.config())
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        repos_screen = " ".join(str(s.render()) for s in app.screen.query(Static))
+        await click(pilot, "#next")
+        await click(pilot, "#next")
+        await click(pilot, "#save")
+    return app, repos_screen
+
+
+async def test_rerunning_setup_keeps_a_config_repo_github_would_not_read(tmp_path):
+    class Locked(FakeGitHub):
+        async def repo_labels(self, repo: str) -> list[str]:
+            if repo == "octo-dev/lanternfish":
+                raise GitHubError("Resource protected by organization SAML enforcement.")
+            return await super().repo_labels(repo)
+
+    github = demo.github()
+    locked = Locked(github.viewer, github.issues, labels=github.labels, projects=github.projects)
+    app, repos_screen = await rerun_and_save(locked, tmp_path / "config.toml")
+    assert "Kept unchanged" in repos_screen
+    assert "octo-dev/lanternfish: Resource protected" in repos_screen
+    # Its project source, and the statuses only it may use, are saved as they were.
+    assert app.return_value == demo.config()
+
+
+async def test_rerunning_setup_without_the_project_scope_keeps_project_sources(tmp_path):
+    github = demo.github()
+    github.scopes = {"repo"}
+    app, repos_screen = await rerun_and_save(github, tmp_path / "config.toml")
+    assert "octo-dev/lanternfish" in repos_screen.split("Kept unchanged")[1]
+    assert app.return_value == demo.config()
+
+
+async def test_setup_saves_when_every_config_repo_is_kept(tmp_path):
+    github = demo.github()
+    github.scopes = {"repo"}
+    current = replace(demo.config(), repos=[Repo("octo-dev/lanternfish", "project", "octo-dev/3")])
+    app = SetupApp(github, tmp_path / "config.toml", current)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        assert options(app) == [("octo-dev/tidepool", False)]  # offered, left unchecked
+        await click(pilot, "#next")
+        await click(pilot, "#next")
+        await click(pilot, "#save")
+    assert app.return_value == current

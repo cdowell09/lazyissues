@@ -6,6 +6,7 @@ the list widget only draws what `visible_groups` returns.
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 from lazyissues.models import Issue, Milestone
 from lazyissues.statuses import IssueStatus, StatusRules
@@ -107,18 +108,14 @@ def by_status(rules: StatusRules) -> Grouping:
 
 def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
     """A group per member, even with nothing assigned, ordered by how many active
-    issues each has; within a member, active issues first, then status order."""
+    issues each has."""
 
     def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
-        ordered = sorted(
-            _in_status_order(rules, issues, status_of),
-            key=lambda i: not rules.is_active(status_of(i).name),
-        )
         groups = [
             # GitHub logins ignore case, and the roster is typed by hand.
             (
                 member,
-                [i for i in ordered if member.casefold() in {a.casefold() for a in i.assignees}],
+                [i for i in issues if member.casefold() in {a.casefold() for a in i.assignees}],
             )
             for member in members
         ]
@@ -127,14 +124,12 @@ def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
     return group
 
 
-def by_milestone(rules: StatusRules, milestones: list[Milestone]) -> Grouping:
-    """A group per milestone, in the order given, even with no issues; issues in status
-    order."""
+def by_milestone(milestones: list[Milestone]) -> Grouping:
+    """A group per milestone, in the order given, even with no issues."""
 
     def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
-        ordered = _in_status_order(rules, issues, status_of)
         return [
-            (m.name, [i for i in ordered if (i.repo, i.milestone) == (m.repo, m.title)])
+            (m.name, [i for i in issues if (i.repo, i.milestone) == (m.repo, m.title)])
             for m in milestones
         ]
 
@@ -158,6 +153,8 @@ def progress_bar(done: int, total: int) -> str:
 def visible_groups(
     issues: list[Issue], grouping: Grouping, rules: StatusRules, state: ViewState
 ) -> list[Group]:
+    """The groups `state` shows, as `grouping` makes and orders them; within a group the
+    most recently updated issue comes first."""
     filtered = _filtered(issues, rules, state)
     statuses = {issue.key: rules.status_of(issue) for issue in filtered}  # once each
     matching = [i for i in filtered if state.focus in (None, statuses[i.key].name)]
@@ -165,10 +162,19 @@ def visible_groups(
     for name, members in grouping(matching, lambda issue: statuses[issue.key]):
         if not members and not _contains(name, state.search):
             continue  # an empty member group shows unless a search names someone else
+        members = sorted(members, key=_updated, reverse=True)
         folded = name in state.folded
         rows = [] if folded else _nested(members, state.folded, statuses)
         groups.append(Group(name, members, rows, folded))
     return groups
+
+
+def _updated(issue: Issue) -> datetime:
+    """When `issue` last changed, to list the latest first; one with no time sorts last."""
+    return datetime.fromisoformat(issue.updated_at) if issue.updated_at else _NEVER
+
+
+_NEVER = datetime.min.replace(tzinfo=UTC)
 
 
 def _nested(
@@ -203,6 +209,16 @@ def focusable_statuses(issues: list[Issue], rules: StatusRules, state: ViewState
     return [group.name for group in rules.group(_filtered(issues, rules, state))]
 
 
+def age(elapsed: timedelta) -> str:
+    """How long ago, in its largest whole unit: "59s", "1m", "23h", "3d". A negative time
+    (a clock set back) is "0s"."""
+    seconds = max(0, int(elapsed.total_seconds()))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
 def _filtered(issues: list[Issue], rules: StatusRules, state: ViewState) -> list[Issue]:
     """Issues passing every filter except status focus."""
     return [
@@ -229,7 +245,3 @@ def _matches(issue: Issue, text: str) -> bool:
 
 def _contains(field: str, text: str) -> bool:
     return text.casefold() in field.casefold()
-
-
-def _in_status_order(rules: StatusRules, issues: list[Issue], status_of: StatusOf) -> list[Issue]:
-    return [issue for group in rules.group(issues, status_of) for issue in group.issues]

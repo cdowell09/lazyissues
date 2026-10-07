@@ -26,6 +26,7 @@ from textual.widgets import (
 
 from lazyissues import editor
 from lazyissues.clipboard import COPY
+from lazyissues.confirm import Confirm
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import IssueDetail
 from lazyissues.store import now
@@ -35,11 +36,33 @@ class FormError(Exception):
     """Input the form can't send; shown like GitHub's errors."""
 
 
-class TextField(TextArea):
+class Field:
+    """A form field, which says whether the user `changed` it since the form filled it
+    in; one the form never filled starts empty. A form asks before discarding a change.
+
+    Only what takes typing or picking is a field: the text boxes, pickers, and the title
+    and milestone. Create's repo and status choices aren't, so changing only those
+    closes without asking."""
+
+    @property
+    def changed(self) -> bool:
+        raise NotImplementedError
+
+
+class TextField(Field, TextArea):
     """Multiline text: Enter submits the form, Shift+Enter or Ctrl+J starts a new line."""
+
+    filled = ""  # the text the form last filled in
 
     class Submitted(Message):
         pass
+
+    @property
+    def changed(self) -> bool:
+        return self.text != self.filled
+
+    def fill(self, text: str) -> None:
+        self.text = self.filled = text
 
     async def _on_key(self, event: events.Key) -> None:
         # Runs before TextArea's handler, which a prevented default skips.
@@ -53,7 +76,7 @@ class TextField(TextArea):
         event.prevent_default()
 
 
-class Picker(Widget):
+class Picker(Field, Widget):
     """Pick any number of `items`; typing in the filter narrows the list."""
 
     DEFAULT_CSS = """
@@ -66,10 +89,15 @@ class Picker(Widget):
         self.items: list[str] = []
         self.chosen: set[str] = set()  # kept while the filter hides some of them
         self.shown: list[str] = []
+        self.filled: list[str] = []  # the picks the form last filled in
 
     @property
     def selected(self) -> list[str]:
         return [item for item in self.items if item in self.chosen]
+
+    @property
+    def changed(self) -> bool:
+        return self.selected != self.filled
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Filter", compact=True)
@@ -78,6 +106,7 @@ class Picker(Widget):
     def set_items(self, items: Iterable[str], selected: Iterable[str]) -> None:
         self.items = list(dict.fromkeys(items))
         self.chosen = set(selected)
+        self.filled = self.selected
         self._show()
 
     def _show(self) -> None:
@@ -112,7 +141,8 @@ class Form(ModalScreen[Written | None]):
 
     A subclass composes its `fields`, can `load` what they offer from GitHub, and
     `save`s. A failed load or save shows the error and keeps the form open, so nothing
-    typed is lost. Closing without a change returns None.
+    typed is lost. Closing without a change returns None, and asks first when a `Field`
+    changed.
     """
 
     REGROUPS: ClassVar[bool] = True  # whether its writes can change a tab's issues
@@ -205,6 +235,10 @@ class Form(ModalScreen[Written | None]):
         self.ready = True
         self.show_message("")
 
+    @property
+    def changed(self) -> bool:
+        return any(isinstance(field, Field) and field.changed for field in self.query("*"))
+
     def show_message(self, text: str, *, error: bool = False) -> None:
         message = self.query_one("#message", Static)
         message.update(text)
@@ -229,8 +263,17 @@ class Form(ModalScreen[Written | None]):
 
     def action_cancel(self) -> None:
         # A save on its way may already have reached GitHub; close with its result.
-        if not self.saving:
+        if self.saving:
+            return
+        if not self.changed:
             self.dismiss(None)
+            return
+
+        def discard(yes: bool | None) -> None:
+            if yes:
+                self.dismiss(None)
+
+        self.app.push_screen(Confirm("Discard your changes?", "Discard", "Keep editing"), discard)
 
     def on_text_field_submitted(self) -> None:
         self.action_submit()
@@ -286,10 +329,22 @@ class Draft:
     milestone: str | None
 
 
-class IssueFields(Widget):
-    """The title, body, labels and milestone fields that create and edit share."""
+class IssueFields(Field, Widget):
+    """The title, body, labels and milestone fields that create and edit share. The body
+    and labels are fields of their own; this one is the title and milestone."""
 
     DEFAULT_CSS = "IssueFields { height: auto; }"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.filled_title = ""  # the title the form last filled in
+        self.filled_milestone: str | None = None  # and the milestone
+
+    @property
+    def changed(self) -> bool:
+        title = self.query_one("#title", Input).value
+        milestone = self.query_one("#milestone", Select).selection
+        return (title, milestone) != (self.filled_title, self.filled_milestone)
 
     def compose(self) -> ComposeResult:
         yield label("Title")
@@ -303,7 +358,8 @@ class IssueFields(Widget):
 
     def fill(self, title: str, body: str) -> None:
         self.query_one("#title", Input).value = title
-        self.query_one(TextField).text = body
+        self.query_one(TextField).fill(body)
+        self.filled_title = title
 
     def offer(
         self,
@@ -318,6 +374,7 @@ class IssueFields(Widget):
         select = self.query_one("#milestone", Select)
         select.set_options(choices([*milestones, *([milestone] if milestone else [])]))
         select.value = milestone or Select.NULL
+        self.filled_milestone = milestone
 
     def draft(self) -> Draft:
         title = self.query_one("#title", Input).value.strip()

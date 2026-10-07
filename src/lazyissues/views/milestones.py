@@ -39,7 +39,7 @@ class Milestones(IssueList):
 
     def grouping(self) -> Grouping:
         shown = [m for m in self.milestones if self.state.repo in (None, m.repo)]
-        return by_milestone(self.rules, shown)
+        return by_milestone(shown)
 
     def header(self, group: Group) -> Text:
         header = super().header(group)

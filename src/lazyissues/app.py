@@ -14,10 +14,11 @@ from lazyissues import clipboard
 from lazyissues import config as config_module
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.config import Config, ConfigError, SavedFilter
+from lazyissues.confirm import Confirm
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.forms.form import FORM_KEYS
 from lazyissues.github import Gateway
-from lazyissues.keys import KeysScreen
+from lazyissues.keys import KeysScreen, tab_bindings
 from lazyissues.models import IssueDetail
 from lazyissues.move_picker import MovePicker
 from lazyissues.move_tracker import MoveTracker
@@ -27,7 +28,6 @@ from lazyissues.status_list import StatusList
 from lazyissues.statuses import StatusRules
 from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views.filters import (
-    ConfirmDelete,
     FilterForm,
     FilterResults,
     Filters,
@@ -58,7 +58,7 @@ class LazyIssuesApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("S", "preferences", "Preferences"),
+        Binding("S", "preferences", "Preferences", show=False),
         Binding("question_mark", "keys", "Keys"),
         clipboard.COPY,
     ]
@@ -203,6 +203,7 @@ class LazyIssuesApp(App[None]):
             KeysScreen(
                 [
                     ("Anywhere", self.BINDINGS),
+                    ("Tabs", tab_bindings(self.tab_titles)),
                     ("Mouse", MOUSE),
                     ("Lists", IssueList.BINDINGS),
                     ("Moving in lists", DataTable.BINDINGS),
@@ -217,7 +218,7 @@ class LazyIssuesApp(App[None]):
                     ("Bulk action summary", BulkSummary.BINDINGS),
                     ("Filters", Filters.BINDINGS),
                     ("Filter form", FilterForm.BINDINGS),
-                    ("Deleting a filter", ConfirmDelete.BINDINGS),
+                    ("Discarding a changed form or deleting a filter", Confirm.BINDINGS),
                     ("Preferences", [*PreferencesScreen.BINDINGS, *StatusList.BINDINGS]),
                 ]
             )
@@ -226,6 +227,8 @@ class LazyIssuesApp(App[None]):
     def compose(self) -> ComposeResult:
         tabs = self.tabs()
         self.tab_titles = [title for title, _ in tabs]
+        for binding in tab_bindings(self.tab_titles):
+            self.bind(binding.key, binding.action, description=binding.description, show=False)
         start = self.config.preferences.start_tab
         start_id = f"tab-{self.tab_titles.index(start) if start in self.tab_titles else 0}"
         yield Header()
@@ -237,6 +240,22 @@ class LazyIssuesApp(App[None]):
 
     def on_mount(self) -> None:
         self.theme = self.config.preferences.theme
-        # The start tab's list, so arrows and Enter work at once.
-        if lists := self.query(f"#{self.query_one(TabbedContent).active} DataTable"):
-            lists.first().focus()
+        self.focus_list()  # so arrows and Enter work at once
+
+    def action_show_tab(self, index: int) -> None:
+        self.query_one(TabbedContent).active = f"tab-{index}"
+        self.focus_list()
+
+    def action_step_tab(self, step: int) -> None:
+        index = int(self.query_one(TabbedContent).active.removeprefix("tab-"))
+        self.action_show_tab((index + step) % len(self.tab_titles))
+
+    def focus_list(self) -> None:
+        """Focus the active tab's list: Filters' shown results, else its sidebar."""
+        pane = self.query_one(TabbedContent).active_pane
+        if pane is None:
+            return
+        shown = [view.query_one(DataTable) for view in pane.query(IssueList) if view.display]
+        focusable = [widget for widget in pane.query("*") if widget.focusable]
+        if target := next(iter(shown + focusable), None):
+            target.focus()

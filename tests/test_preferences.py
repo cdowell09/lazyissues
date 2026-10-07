@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+import pytest
 from listed import plain, show_tab
 from textual import events
 from textual.pilot import Pilot
@@ -21,7 +22,7 @@ from lazyissues import config as config_module
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Preferences, SavedFilter, Status
-from lazyissues.keys import KeysScreen
+from lazyissues.keys import KeysScreen, tab_bindings
 from lazyissues.move_picker import MovePicker
 from lazyissues.preferences import PreferencesScreen
 from lazyissues.status_list import StatusList
@@ -81,6 +82,19 @@ async def test_question_mark_lists_the_keys_of_the_app_lists_and_detail():
             "/ Search",
             "esc Clear search",  # hidden from the footer, still listed
             "F Focus previous status",
+            # Hidden from the footer to fit 80 columns, still listed
+            "z Fold",
+            "d Done",
+            "space Select",
+            "B Bulk move or assign",
+            "y Copy link",
+            "w Full screen",
+            "C Comment",
+            "Tabs",
+            "1 My Work",
+            "5 Filters",
+            "[ Previous tab",
+            "] Next tab",
             "Issue detail",
             "← Previous",
             "h Activity",
@@ -264,6 +278,31 @@ async def test_a_status_key_the_lists_already_bind_is_warned_about(tmp_path):
         assert any("c is already a key" in toast for toast in toasts)
 
 
+@pytest.mark.parametrize("key", ["2", "]"])
+async def test_a_status_key_that_switches_tabs_is_warned_about(tmp_path, key):
+    app = LazyIssuesApp(demo.config(), demo.github(), config_path=tmp_path / "config.toml")
+    async with app.run_test(size=(100, 60), notifications=True) as pilot:
+        await settled(pilot)
+        screen = await open_preferences(pilot)
+        screen.query_one(StatusList).focus()
+        screen.query_one("#key", Input).focus()
+        await pilot.press(key)
+        await pilot.pause()
+        toasts = [str(toast.render()) for toast in app.screen.query("Toast")]
+        assert any(f"{key} is already a key" in toast for toast in toasts)
+
+
+async def test_a_status_shortcut_on_a_tab_key_switches_tabs_instead():
+    statuses = [replace(s, key="2") if s.key == "p" else s for s in demo.config().statuses]
+    app = LazyIssuesApp(replace(demo.config(), statuses=statuses), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await pilot.press("down", "2")
+        await pilot.pause()
+        assert active_tab(app) == "Team"
+        assert not isinstance(app.screen, MovePicker)
+
+
 async def test_saving_preferences_keeps_filters_saved_earlier(tmp_path):
     path = tmp_path / "config.toml"
     app = LazyIssuesApp(demo.config(), demo.github(), config_path=path)
@@ -277,3 +316,14 @@ async def test_saving_preferences_keeps_filters_saved_earlier(tmp_path):
     saved = config_module.load(path)
     assert saved.filters == [SavedFilter("Bugs", "label:bug")]
     assert saved.preferences.theme == "nord"
+
+
+def test_number_keys_reach_the_first_nine_tabs():
+    nine = tab_bindings([f"Tab {i}" for i in range(1, 10)])
+    assert [b.key for b in nine][:9] == [str(i) for i in range(1, 10)]
+    ten = tab_bindings([f"Tab {i}" for i in range(1, 11)])
+    assert [b.key for b in ten] == [
+        *(str(i) for i in range(1, 10)),
+        "left_square_bracket",
+        "right_square_bracket",
+    ]

@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -25,7 +27,7 @@ def test_a_new_store_opens_with_the_last_snapshot(tmp_path):
         issue(1, assignees=("octo", "sam")),
         issue(2, labels=("bug",), closed=True, project_statuses={"octo/3": "In Progress"}),
     ]
-    IssueStore(path).replace(issues, requested_at=1.0)
+    IssueStore(path).replace(issues, requested_at=1.0, loaded_at=None)
 
     assert IssueStore(path).issues == issues
 
@@ -54,16 +56,16 @@ def test_an_unreadable_snapshot_is_discarded_and_rebuilt(tmp_path, content):
     store = IssueStore(path)
     assert store.issues == []
 
-    store.replace([issue(1)], requested_at=1.0)
+    store.replace([issue(1)], requested_at=1.0, loaded_at=None)
     assert IssueStore(path).issues == [issue(1)]
 
 
 def test_a_read_requested_before_the_loaded_one_is_ignored(tmp_path):
     path = tmp_path / "snapshot.json"
     store = IssueStore(path)
-    store.replace([issue(1, "newer")], requested_at=2.0)
+    store.replace([issue(1, "newer")], requested_at=2.0, loaded_at=None)
 
-    store.replace([issue(1, "older")], requested_at=1.0)
+    store.replace([issue(1, "older")], requested_at=1.0, loaded_at=None)
     assert store.issues == [issue(1, "newer")]
     assert IssueStore(path).issues == [issue(1, "newer")]
 
@@ -71,7 +73,7 @@ def test_a_read_requested_before_the_loaded_one_is_ignored(tmp_path):
 def test_each_view_and_repo_set_has_its_own_snapshot(tmp_path):
     cache = tmp_path / "not-yet-created"
     path = snapshot_path(cache, "team", ["octo/a", "octo/b"])
-    IssueStore(path).replace([issue(1)], requested_at=1.0)
+    IssueStore(path).replace([issue(1)], requested_at=1.0, loaded_at=None)
 
     assert IssueStore(snapshot_path(cache, "team", ["octo/b", "octo/a"])).issues == [issue(1)]
     assert IssueStore(snapshot_path(cache, "team", ["octo/a"])).issues == []
@@ -83,7 +85,7 @@ def test_an_unwritable_cache_still_updates_the_loaded_issues(tmp_path):
     blocker.write_text("a file where the cache directory should be", encoding="utf-8")
     store = IssueStore(blocker / "snapshot.json")
 
-    store.replace([issue(1)], requested_at=1.0)
+    store.replace([issue(1)], requested_at=1.0, loaded_at=None)
     assert store.issues == [issue(1)]
 
 
@@ -92,7 +94,7 @@ def test_a_store_without_a_snapshot_lives_in_memory(tmp_path, monkeypatch):
     store = IssueStore()
     assert store.issues == []
 
-    store.replace([issue(1)], requested_at=1.0)
+    store.replace([issue(1)], requested_at=1.0, loaded_at=None)
     assert store.issues == [issue(1)]
     assert list(tmp_path.iterdir()) == []
 
@@ -120,12 +122,12 @@ async def test_a_refresh_answered_after_a_later_one_is_ignored():
 def test_a_read_requested_before_a_confirmed_move_keeps_that_issues_new_status(tmp_path):
     moves = MoveTracker()
     store = IssueStore(tmp_path / "snapshot.json", moves)
-    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0)
+    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0, loaded_at=None)
     moves.start(store.issues[0], "doing")
     moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
 
     # Requested before the move was confirmed, answered after it.
-    store.replace([issue(1, "renamed", labels=("todo",)), issue(2, "renamed")], 4.0)
+    store.replace([issue(1, "renamed", labels=("todo",)), issue(2, "renamed")], 4.0, None)
 
     assert store.issues == [issue(1, "renamed", labels=("doing",)), issue(2, "renamed")]
 
@@ -134,7 +136,7 @@ def test_a_confirmed_move_shows_on_the_loaded_issues_and_their_snapshot(tmp_path
     path = tmp_path / "snapshot.json"
     moves = MoveTracker()
     store = IssueStore(path, moves)
-    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0)
+    store.replace([issue(1, labels=("todo",)), issue(2)], requested_at=1.0, loaded_at=None)
     moves.start(store.issues[0], "doing")
     moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
 
@@ -146,7 +148,7 @@ def test_a_confirmed_move_shows_on_the_loaded_issues_and_their_snapshot(tmp_path
 def test_update_replaces_a_loaded_issue_in_place_and_saves_it(tmp_path):
     path = tmp_path / "snapshot.json"
     store = IssueStore(path)
-    store.replace([issue(1), issue(2)], requested_at=1.0)
+    store.replace([issue(1), issue(2)], requested_at=1.0, loaded_at=None)
 
     assert store.update(issue(1, "Renamed"), written_at=2.0)
     assert not store.update(issue(3), written_at=2.0)  # not loaded here, so not added
@@ -157,20 +159,20 @@ def test_update_replaces_a_loaded_issue_in_place_and_saves_it(tmp_path):
 
 def test_a_read_requested_before_a_write_keeps_the_written_copy(tmp_path):
     store = IssueStore(tmp_path / "snapshot.json")
-    store.replace([issue(1), issue(2)], requested_at=1.0)
+    store.replace([issue(1), issue(2)], requested_at=1.0, loaded_at=None)
     store.update(issue(1, "Written"), written_at=5.0)
 
-    store.replace([issue(1, "Stale"), issue(2, "Fresh")], requested_at=4.0)
+    store.replace([issue(1, "Stale"), issue(2, "Fresh")], requested_at=4.0, loaded_at=None)
     assert [i.title for i in store.issues] == ["Written", "Fresh"]
 
-    store.replace([issue(1, "Newer"), issue(2)], requested_at=6.0)
+    store.replace([issue(1, "Newer"), issue(2)], requested_at=6.0, loaded_at=None)
     assert store.issues[0].title == "Newer"
 
 
 def test_a_move_confirmed_before_a_write_is_not_applied_over_it_again(tmp_path):
     moves = MoveTracker()
     store = IssueStore(tmp_path / "snapshot.json", moves)
-    store.replace([issue(1, labels=("todo",))], requested_at=1.0)
+    store.replace([issue(1, labels=("todo",))], requested_at=1.0, loaded_at=None)
     moves.start(store.issues[0], "doing")
     moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=2.0)
     store.apply_moves()
@@ -188,8 +190,8 @@ def test_a_burst_of_changes_saves_one_snapshot_holding_the_last(tmp_path, monkey
 
     async def burst() -> None:
         store = IssueStore(path)
-        store.replace([issue(1)], requested_at=1.0)
-        store.replace([issue(1), issue(2)], requested_at=2.0)
+        store.replace([issue(1)], requested_at=1.0, loaded_at=None)
+        store.replace([issue(1), issue(2)], requested_at=2.0, loaded_at=None)
         assert not path.exists()  # waiting for the burst to end
         await asyncio.sleep(0.05)
 
@@ -203,8 +205,38 @@ def test_flush_saves_a_pending_snapshot_at_once(tmp_path):
 
     async def change_and_exit() -> None:
         store = IssueStore(path)
-        store.replace([issue(1)], requested_at=1.0)
+        store.replace([issue(1)], requested_at=1.0, loaded_at=None)
         store.flush()
         assert IssueStore(path).issues == [issue(1)]
 
     asyncio.run(change_and_exit())
+
+
+async def test_a_refresh_records_when_its_data_was_loaded_and_the_snapshot_keeps_it(tmp_path):
+    path = tmp_path / "snapshot.json"
+    store = IssueStore(path)
+    assert store.loaded_at is None
+
+    async def read() -> list[Issue]:
+        return [issue(1)]
+
+    before = datetime.now(UTC)
+    await store.refresh(read())
+    loaded_at = store.loaded_at
+    assert loaded_at is not None and before <= loaded_at <= datetime.now(UTC)
+
+    store.update(issue(1, "Written"), written_at=store.requested_at + 1)
+    store.apply_moves()
+    assert store.loaded_at == loaded_at  # a write or move doesn't make the rest fresher
+    store.flush()
+
+    assert IssueStore(path).loaded_at == loaded_at
+
+
+def test_a_snapshot_from_the_previous_version_is_ignored(tmp_path):
+    path = tmp_path / "snapshot.json"
+    fields = {"repo": "octo/repo", "number": 1, "title": "t", "url": "u"}
+    path.write_text(json.dumps({"version": V - 1, "issues": [fields]}), encoding="utf-8")
+
+    store = IssueStore(path)
+    assert (store.issues, store.loaded_at) == ([], None)

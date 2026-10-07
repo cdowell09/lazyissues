@@ -6,6 +6,7 @@ confirmed.
 """
 
 import math
+import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
@@ -130,24 +131,31 @@ class Writer:
             self.mover.move(issue, MoveTo(written.status))
 
 
-# The writing keys. A host lists them in its own BINDINGS: Textual only gathers
-# BINDINGS from widget classes, and `IssueActions` is a plain mixin.
+# The writing keys, and the keys for the issue's link; the footer leaves the less frequent
+# ones to `?`, which lists every key. A host lists them in its own
+# BINDINGS: Textual only gathers BINDINGS from widget classes, and `IssueActions` is a
+# plain mixin.
 WRITE_BINDINGS = [
-    Binding("C", "comment", "Comment"),
-    Binding("a", "assign", "Assign"),
-    Binding("c", "create", "New issue"),
-    Binding("e", "edit", "Edit"),
+    Binding("C", "comment", "Comment", show=False),
+    Binding("a", "assign", "Assign", show=False),
+    Binding("c", "create", "New issue", show=False),
+    Binding("e", "edit", "Edit", show=False),
+]
+LINK_BINDINGS = [
+    Binding("o", "open_in_browser", "Open link"),
+    Binding("y", "copy_link", "Copy link", show=False),
 ]
 
 
 class IssueActions:
-    """The actions of `WRITE_BINDINGS`, for the `selected` issue.
+    """The actions of `WRITE_BINDINGS` and `LINK_BINDINGS`, for the `selected` issue.
 
-    A list or the detail mixes this in, adds `WRITE_BINDINGS` and sets `writer`. A plain
-    class, not a widget, so it can't come between a screen and `Screen` in the MRO.
+    A list or the detail mixes this in, adds both and sets `writer`. A plain class, not a
+    widget, so it can't come between a screen and `Screen` in the MRO.
     """
 
     writer: Writer
+    app: App[Any]  # the host widget's
 
     def selected(self) -> Issue | None:
         raise NotImplementedError
@@ -166,3 +174,12 @@ class IssueActions:
     def action_edit(self) -> None:
         if issue := self.selected():
             self.writer.edit(issue)
+
+    def action_open_in_browser(self) -> None:
+        if issue := self.selected():
+            webbrowser.open(issue.url)
+
+    def action_copy_link(self) -> None:
+        if issue := self.selected():
+            self.app.copy_to_clipboard(issue.url)
+            self.app.notify(f"Copied {issue.url}")

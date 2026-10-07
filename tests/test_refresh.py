@@ -1,10 +1,11 @@
 """My Work opens from the snapshot and refreshes in the background."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from textual.app import App
 from textual.pilot import Pilot
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from lazyissues import demo
 from lazyissues import store as store_module
@@ -13,6 +14,8 @@ from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.store import IssueStore, snapshot_path
+from lazyissues.views import issue_list
+from lazyissues.views.issue_list import IssueList
 
 MY_DEMO_ISSUES = [  # in display order, by status group
     "octo-dev/lanternfish#9",
@@ -107,7 +110,9 @@ async def test_an_indicator_shows_while_refreshing():
 
 async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_path):
     store = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
-    store.replace(await demo.github().search_issues("assignee:@me"), requested_at=0.0)
+    store.replace(
+        await demo.github().search_issues("assignee:@me"), requested_at=0.0, loaded_at=None
+    )
     store.flush()
 
     app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), tmp_path)
@@ -119,6 +124,77 @@ async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_
         assert any("timed out" in text for text in notifications(app))
 
 
+class Flaky(FakeGitHub):
+    """A fake GitHub whose searches fail while `down`."""
+
+    down = True
+
+    async def search_issues(self, query: str) -> list[Issue]:
+        if self.down:
+            raise GitHubError("Couldn't reach GitHub: timed out")
+        return await super().search_issues(query)
+
+
+async def snapshot(tmp_path, loaded_at: datetime) -> None:
+    """Save My Work's snapshot of the demo issues as loaded at `loaded_at`."""
+    store = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
+    issues = await demo.github().search_issues("assignee:@me")
+    store.replace(issues, requested_at=0.0, loaded_at=loaded_at)
+    store.flush()
+
+
+def status_line(app: LazyIssuesApp) -> str:
+    return str(app.query_one("#my-work #filters", Static).render())
+
+
+async def test_the_snapshots_age_shows_at_startup_and_after_each_refresh(tmp_path):
+    await snapshot(tmp_path, datetime.now(UTC) - timedelta(minutes=4, seconds=30))
+
+    github = Gated(demo.github())
+    app = LazyIssuesApp(demo.config(), github, tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert status_line(app) == "updated 4m ago"  # before GitHub answers
+
+        github.gate.set()
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert status_line(app) == "updated 0s ago"
+
+
+async def test_the_age_keeps_counting_between_refreshes(tmp_path, monkeypatch):
+    monkeypatch.setattr(issue_list, "AGE_TICK", 0.05)
+    await snapshot(tmp_path, datetime.now(UTC) - timedelta(minutes=4, seconds=30))
+
+    app = LazyIssuesApp(demo.config(), Gated(demo.github()), tmp_path)  # never answers
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert status_line(app) == "updated 4m ago"
+
+        store = app.query_one("#my-work", IssueList).store
+        store.loaded_at = datetime.now(UTC) - timedelta(minutes=5, seconds=30)
+        await pilot.pause(0.2)
+        assert status_line(app) == "updated 5m ago"
+
+
+async def test_a_failed_refresh_says_when_the_cache_is_from_until_a_refresh_succeeds(tmp_path):
+    await snapshot(tmp_path, datetime.now().astimezone().replace(hour=9, minute=12))
+
+    github = Flaky(**vars(demo.github()))
+    app = LazyIssuesApp(demo.config(), github, tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert status_line(app) == "refresh failed · cached 09:12"
+
+        await refreshed(pilot)
+        assert status_line(app) == "refresh failed · cached 09:12"  # still down
+
+        github.down = False
+        await refreshed(pilot)
+        assert status_line(app) == "updated 0s ago"
+
+
 async def test_r_refreshes_and_keeps_the_selected_issue_when_rows_move():
     github = demo.github()
     app = LazyIssuesApp(demo.config(), github)
@@ -126,14 +202,15 @@ async def test_r_refreshes_and_keeps_the_selected_issue_when_rows_move():
         await pilot.app.workers.wait_for_complete()
         await select(pilot, "octo-dev/tidepool#12")
 
-        github.issues.reverse()
-        github.issues.insert(0, Issue("octo-dev/tidepool", 20, "New", "u", (demo.VIEWER,)))
+        now = datetime.now(UTC).isoformat()
+        new = Issue("octo-dev/tidepool", 20, "New", "u", (demo.VIEWER,), updated_at=now)
+        github.issues.append(new)  # the latest, so the rows below it move down
         await refreshed(pilot)
         assert listed(app) == [
             "octo-dev/tidepool#20",
             "octo-dev/lanternfish#9",
-            "octo-dev/lanternfish#4",
             "octo-dev/tidepool#12",
+            "octo-dev/lanternfish#4",
             "octo-dev/tidepool#15",
             "octo-dev/lanternfish#11",
         ]

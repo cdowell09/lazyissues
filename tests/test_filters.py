@@ -11,10 +11,11 @@ from lazyissues import config as config_module
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import SavedFilter
+from lazyissues.confirm import Confirm
 from lazyissues.fake import FakeGitHub
 from lazyissues.forms.edit import EditForm
 from lazyissues.models import Issue
-from lazyissues.views.filters import ConfirmDelete, FilterForm, FilterResults
+from lazyissues.views.filters import FilterForm, FilterResults
 
 
 class Counting(FakeGitHub):
@@ -218,7 +219,7 @@ async def test_n_e_and_x_act_only_in_the_sidebar(tmp_path):
     async with app.run_test() as pilot:
         await open_filters(pilot)
         await pilot.press("tab", "n", "x")
-        assert not isinstance(app.screen, FilterForm | ConfirmDelete)
+        assert not isinstance(app.screen, FilterForm | Confirm)
 
 
 async def test_each_filter_opens_from_its_own_snapshot_on_the_next_launch(tmp_path):

@@ -160,15 +160,15 @@ async def test_clicking_a_parents_fold_arrow_folds_and_unfolds_its_sub_issues():
     async with app.run_test() as pilot:
         await settled(pilot)
         await click_tab(pilot, "Team")
-        assert first_cell(app, 3, "team") == "  ▾ lanternfish#9"
-        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
+        assert first_cell(app, 4, "team") == "  ▾ lanternfish#9"
+        assert first_cell(app, 5, "team") == "    └ lanternfish#11"
 
         arrow = ISSUE_TEXT + len(INDENT)  # under its group's name
-        await click_row(pilot, 3, x=arrow, view="team")
-        assert first_cell(app, 3, "team") == "  ▸ lanternfish#9"
-        assert first_cell(app, 4, "team") == "    tidepool#15 ⚠"
-        await click_row(pilot, 3, x=arrow, view="team")
-        assert first_cell(app, 4, "team") == "    └ lanternfish#11"
+        await click_row(pilot, 4, x=arrow, view="team")
+        assert first_cell(app, 4, "team") == "  ▸ lanternfish#9"
+        assert first_cell(app, 5, "team") == "▾ sam-reef (2)"
+        await click_row(pilot, 4, x=arrow, view="team")
+        assert first_cell(app, 5, "team") == "    └ lanternfish#11"
         assert not isinstance(app.screen, IssueDetailScreen)
 
 
@@ -252,7 +252,7 @@ async def test_dragging_across_detail_text_and_ctrl_c_copies_it():
 async def test_dragging_across_a_list_row_selects_its_text_without_opening_it():
     copied: list[str] = []
     app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(120, 24)) as pilot:  # wide enough not to cut refs
         await settled(pilot)
         await click_row(pilot, 1)
         cell = first_cell(app, 1)
@@ -282,6 +282,46 @@ async def test_the_footer_offers_copy_while_text_is_selected():
         await quick_click(pilot, key)
         await until(pilot, lambda: bool(copied))  # Copy presses ctrl+c, a message later
         assert copied == [ref]
+
+
+async def test_the_list_footer_fits_80_columns_even_while_offering_copy():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        cell = first_cell(app, 1)
+        start = ISSUE_TEXT + len(cell) - len(cell.lstrip())
+        await drag(pilot, table(app), (start, 2), (start + 3, 2))  # the footer's widest
+        await until(pilot, lambda: copy_key(app) is not None)
+        *keys, palette = app.screen.query("Footer FooterKey")  # ^p, docked on the right
+        assert [" ".join(str(key.render()).split()) for key in keys] == [
+            "o Open link",
+            "/ Search",
+            "m Move",
+            "^c Copy",
+            "q Quit",
+            "r Refresh",
+            "? Keys",
+        ]
+        assert keys[-1].region.right <= palette.region.x
+
+
+def footer(app: App) -> tuple[list[str], int]:
+    """The footer's keys as shown, and the column right of the last one."""
+    keys = list(app.screen.query("Footer FooterKey"))
+    return [" ".join(str(key.render()).split()) for key in keys], keys[-1].region.right
+
+
+async def test_the_detail_footer_fits_80_columns_with_and_without_copy():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        detail = await open_detail(pilot)
+        keys = ["o Open link", "w Full screen", "h Activity", "m Move", "esc Close"]
+        assert footer(app) == (keys, 59)
+
+        await drag(pilot, detail.query_one("#detail .title"), (0, 0), (3, 0))
+        await until(pilot, lambda: copy_key(app) is not None)
+        assert footer(app) == (["^c Copy", *keys], 68)  # within 80 columns
 
 
 async def test_dragging_across_a_form_field_and_ctrl_c_copies_it():
@@ -328,7 +368,7 @@ async def test_filter_form_and_delete_buttons_are_clickable():
         assert filters.filters[-1] == SavedFilter("Mine", "assignee:@me")
 
         await pilot.press("x")
-        await pilot.click("#delete")
+        await pilot.click("#yes")
         await settled(pilot)
         assert [f.name for f in filters.filters] == [f.name for f in demo.config().filters]
 

@@ -7,6 +7,7 @@ import math
 import time
 from collections.abc import Awaitable
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,9 @@ import platformdirs
 from lazyissues.models import Issue
 from lazyissues.move_tracker import MoveTracker
 
-# Bump whenever `Issue` changes shape. Snapshots store `Issue` fields as JSON, so
-# they must stay strings, numbers, booleans, None, or tuples and dicts of those.
-SNAPSHOT_VERSION = 4
+# Bump whenever the snapshot or `Issue` changes shape. Snapshots store `Issue` fields as
+# JSON, so they must stay strings, numbers, booleans, None, or tuples and dicts of those.
+SNAPSHOT_VERSION = 6
 
 # The clock reads are stamped with when requested, and moves with when confirmed:
 # monotonic, and fine-grained on Windows too.
@@ -54,7 +55,9 @@ class IssueStore:
     def __init__(self, path: Path | None = None, moves: MoveTracker | None = None) -> None:
         self.path = path
         self.moves = moves or MoveTracker()
-        self.issues: list[Issue] = self._load()
+        self.issues: list[Issue] = []
+        self.loaded_at: datetime | None = None  # when GitHub answered the read, if one has
+        self._load()
         self.requested_at = -math.inf  # when the read behind `issues` was requested
         self._written: dict[str, float] = {}  # when each issue's latest write was sent
         self._saving: asyncio.TimerHandle | None = None  # the pending save, if any
@@ -62,10 +65,12 @@ class IssueStore:
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
         """Await a read from GitHub and apply it, stamped with when it was requested."""
         requested_at = now()
-        self.replace(await read, requested_at)
+        issues = await read
+        self.replace(issues, requested_at, loaded_at=datetime.now(UTC))
 
-    def replace(self, issues: list[Issue], requested_at: float) -> None:
-        """Apply a read requested at `requested_at` (on `now`'s clock).
+    def replace(self, issues: list[Issue], requested_at: float, loaded_at: datetime | None) -> None:
+        """Apply a read requested at `requested_at` (on `now`'s clock) and answered at
+        `loaded_at`.
 
         A read requested before the one already applied is ignored. Within a read, an
         issue moved since the read was requested keeps its confirmed status, and one
@@ -76,11 +81,12 @@ class IssueStore:
         loaded = {issue.key: issue for issue in self.issues}
         self.issues = [self._settle(issue, requested_at, loaded) for issue in issues]
         self.requested_at = requested_at
+        self.loaded_at = loaded_at
         self._save()
 
     def apply_moves(self) -> None:
         """Show the moves confirmed since the loaded read was requested."""
-        self.replace(self.issues, self.requested_at)
+        self.replace(self.issues, self.requested_at, self.loaded_at)
 
     def update(self, issue: Issue, written_at: float) -> bool:
         """Replace the loaded copy of `issue` with the one GitHub confirmed for a write
@@ -100,17 +106,20 @@ class IssueStore:
             issue = loaded[issue.key]
         return self.moves.settle(issue, max(requested_at, written))
 
-    def _load(self) -> list[Issue]:
-        """The snapshot's issues; a missing, corrupt or old-format one is discarded."""
+    def _load(self) -> None:
+        """Open the snapshot; a missing, corrupt or old-format one is discarded."""
         if self.path is None:
-            return []
+            return
         try:
             snapshot = json.loads(self.path.read_text(encoding="utf-8"))
             if snapshot["version"] != SNAPSHOT_VERSION:
-                return []
-            return [_issue(fields) for fields in snapshot["issues"]]
+                return
+            issues = [_issue(fields) for fields in snapshot["issues"]]
+            stamp = snapshot["loaded_at"]
+            loaded_at = datetime.fromisoformat(stamp) if stamp else None
         except (OSError, ValueError, LookupError, TypeError, AttributeError):
-            return []
+            return
+        self.issues, self.loaded_at = issues, loaded_at
 
     def _save(self) -> None:
         """Save the snapshot soon, once for a burst of changes. Without a running event
@@ -134,7 +143,11 @@ class IssueStore:
     def _write(self) -> None:
         if self.path is None:
             return
-        snapshot = {"version": SNAPSHOT_VERSION, "issues": [asdict(i) for i in self.issues]}
+        snapshot = {
+            "version": SNAPSHOT_VERSION,
+            "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
+            "issues": [asdict(i) for i in self.issues],
+        }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(snapshot), encoding="utf-8")

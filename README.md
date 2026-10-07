@@ -39,7 +39,9 @@ A saved filter is a name and a query in [GitHub's issue search syntax](https://d
 
 In the sidebar, `n` adds a filter, `e` edits the highlighted one and `x` deletes it after you confirm; each change is saved to `config.toml` at once, keeping your comments. Each filter's results keep their own snapshot, search and folds.
 
-In every tab, issues are indented under their group's header, and a sub-issue whose parent is in the same group hangs under it on a tree line (`├ lanternfish#7`, `└ lanternfish#11`); otherwise its row leads with the parent, dimmed (`lanternfish#9 → lanternfish#7`). A parent's `▾`/`▸` sits in a column of its own, so every issue number lines up. `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
+In every tab, issues are indented under their group's header, most recently updated first, and the Updated column says how long ago each one changed (`5m`, `3h`, `2d`). A sub-issue whose parent is in the same group hangs under it on a tree line (`├ lanternfish#7`, `└ lanternfish#11`); otherwise its row leads with the parent, dimmed (`lanternfish#9 → lanternfish#7`). A parent's `▾`/`▸` sits in a column of its own, so every issue number lines up. `z` on a parent or one of its sub-issues folds the parent's sub-issues; the group's count still includes them.
+
+Lists fit the terminal and refit when you resize it: Title takes the room the other columns leave, and a title cut short ends in `…`, so Status, Assignees, Labels and Updated stay on screen even at 80 columns. On a terminal narrower than 100 columns, the detail opens full screen.
 
 ## Statuses
 
@@ -81,22 +83,27 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `a` | lists, detail | assign: pick from the team roster and the repo's assignable users |
 | `c` | lists, detail | create an issue |
 | `e` | lists, detail | edit the issue's title, body, labels and milestone |
+| `o` | lists, detail | open the issue in your browser |
+| `y` | lists, detail | copy the issue's URL, through your terminal and the system clipboard (see [Mouse](#mouse)) |
 | `Space` | lists | select the issue for a bulk action, or on a group header the whole group; again to unselect |
 | `A` `u` | lists | select every issue shown; clear the selection |
 | `B` | lists | bulk move or assign the selected issues |
 | `←` `→` | detail | previous or next issue in the list underneath |
-| `z` | detail | toggle full screen |
-| `o` | detail | open the issue in your browser |
+| `w` | detail | toggle full screen |
 | `h` | detail | toggle the activity timeline |
 | `Esc` | detail | close |
 | `r` | lists | refresh the tab from GitHub |
 | `Enter` | Filters sidebar | run the highlighted filter |
 | `Tab` `Shift+Tab` | Filters | move between the sidebar and the results |
 | `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
+| `1`–`5` | anywhere | go to a tab and its list, Filters included |
+| `[` `]` | anywhere | go to the previous or next tab |
 | `S` | anywhere | preferences |
 | `?` | anywhere | list every key |
 | `Ctrl+C` | anywhere | copy the selected text |
 | `q` | anywhere | quit |
+
+The footer shows the keys you reach for most, so it fits an 80-column terminal; `?` lists every key.
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
@@ -110,7 +117,7 @@ Drag across text in a list, the detail or a form field to select it. Press `Ctrl
 
 ## Moves
 
-`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists don't already use.
+`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists, the detail and the tab keys don't already use.
 
 - In a label-backed repo, a move adds the status's label (creating it in the repo if it has none) and removes every other status label.
 - In a project-backed repo, a move adds the issue to the project if it isn't on it, then sets its Status.
@@ -151,11 +158,13 @@ Before anything is sent, a confirmation lists the issues that will change and th
 - **Create** starts in the repo you last created in, else the selected issue's. Its status is set as a move once the issue exists: the status label in a label-backed repo, or the project's Status in a project-backed one. If GitHub rejects that, the issue is still created and the rejected move stays on screen.
 - **Edit** starts from the issue's cached detail when there is one (else GitHub's copy) and sends only the fields you changed, so edits made elsewhere meanwhile are kept.
 
-If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
+If you typed text or changed a pick (labels, assignees, milestone), `Esc` asks before discarding it; choosing only create's repo or status doesn't ask: `y` discards, `n` or `Esc` keeps editing. A form whose save is already on its way closes once GitHub answers. If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
 
 ## Cache
 
 The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup only the tab you start on refreshes; each other tab refreshes the first time you open it. Deleting it is always safe.
+
+The line under each list says how old its issues are (`updated 4m ago`), from startup on. If a refresh fails, the list keeps its cached issues and the line says so and when they were loaded (`refresh failed · cached 09:12`) until a refresh succeeds.
 
 ## Rate limits
 
@@ -182,7 +191,9 @@ The first time you run `lazyissues` there is no config yet, so it starts setup. 
 
 If your `gh` token lacks the `project` scope, setup says so and offers labels only. Run `gh auth refresh -s project`, then start lazyissues again to use project boards.
 
-Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`). To run setup again, delete or rename `config.toml`.
+Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`).
+
+To change your repos, status sources or statuses later, run `lazyissues --setup`. It starts from your current config: its repos are checked (other repos where you have open issues are offered unchecked), each keeps its status source, the labels that are statuses are checked, and the statuses keep their order, active marks and move keys. A status a source now offers that the config doesn't list joins the end. A repo setup can't read now, or a project-backed one when your token lacks the `project` scope, is kept unchanged with all your statuses, and the Repos screen lists it under "Kept unchanged"; edit `config.toml` to drop one. Saving keeps your team roster, saved filters, preferences, other settings and the comments in `config.toml`; quitting with `ctrl+q` leaves it unchanged. Without a config, `--setup` is the same as a first run.
 
 ## Configuration
 

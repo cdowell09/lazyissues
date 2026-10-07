@@ -39,10 +39,11 @@ class SetupApp(App[Config]):
         Binding("r", "retry", "Retry"),
     ]
 
-    def __init__(self, github: Gateway, path: Path) -> None:
+    def __init__(self, github: Gateway, path: Path, current: Config | None = None) -> None:
         super().__init__()
         self.github = github
         self.path = path
+        self.current = current  # the config a rerun starts from; None on first run
         self.failed = False  # discovery failed; `r` retries it
 
     def compose(self) -> ComposeResult:
@@ -64,7 +65,7 @@ class SetupApp(App[Config]):
         status = self.query_one("#status", Static)
         status.update("Looking for repos where you have open issues…")
         try:
-            proposal = await discover(self.github)
+            proposal = await discover(self.github, self.current)
         except GitHubError as e:
             status.update(f"Setup couldn't read GitHub: {e}\n\nPress r to try again.")
             self.failed = True
@@ -113,12 +114,20 @@ class ReposScreen(_Step):
                 id="scope-warning",
                 classes="warning",
             )
-        if self.proposal.unreadable:
-            yield Static(
-                "Left out because GitHub wouldn't read them (add one below to retry):\n"
-                + "\n".join(f"{repo}: {error}" for repo, error in self.proposal.unreadable.items()),
-                classes="warning",
-            )
+        kept = {repo.name for repo in self.proposal.kept}
+        for repos, why in (
+            (
+                kept,
+                "Kept unchanged because setup couldn't read them (edit config.toml to drop one):",
+            ),
+            (
+                self.proposal.unreadable.keys() - kept,
+                "Left out because GitHub wouldn't read them (add one below to retry):",
+            ),
+        ):
+            if repos:
+                errors = (f"{repo}: {self.proposal.unreadable[repo]}" for repo in sorted(repos))
+                yield Static("\n".join([why, *errors]), classes="warning")
         yield Label("Repos to track", classes="title")
         yield Static("Suggested from repos where you have open issues.", classes="hint")
         yield SelectionList[str](
@@ -154,6 +163,9 @@ class ReposScreen(_Step):
         error.update("")
         self.query_one(Input).clear()
         name = self.proposal.add(name, offer)
+        if name in self.proposal.unreadable:
+            error.update(f"{name} stays as configured: {self.proposal.unreadable[name]}.")
+            return
         repos = self.query_one(SelectionList)
         if name in [repos.get_option_at_index(i).value for i in range(repos.option_count)]:
             repos.select(name)
@@ -161,7 +173,7 @@ class ReposScreen(_Step):
             repos.add_option((name, name, True))
 
     def action_next(self) -> None:
-        if not self.proposal.repos:
+        if not self.proposal.has_repos:
             self.notify("Pick at least one repo.", severity="warning")
             return
         self.app.push_screen(SourcesScreen(self.proposal))
@@ -248,9 +260,10 @@ class StatusesScreen(_Step):
             yield Button("Move up", action="screen.move(-1)")
             yield Button("Move down", action="screen.move(1)")
             yield Button("Save", id="save", variant="primary", action="screen.save")
+        base = self.proposal.base
         yield Static(
-            f"Your team roster starts with {self.proposal.viewer}, and the Filters tab with"
-            " Ready for me and Needs triage.",
+            f"Your team roster is {', '.join(base.team) or 'empty'}, and the Filters tab has"
+            f" {', '.join(f.name for f in base.filters) or 'no filters'}.",
             classes="hint",
         )
 

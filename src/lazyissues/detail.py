@@ -5,7 +5,6 @@ through issues here tells the view, through `select`, which issue to select.
 """
 
 import asyncio
-import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
@@ -23,7 +22,7 @@ from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Event, EventKind, Issue, IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.store import now
-from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
+from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
 
 _ACTIONS: dict[EventKind, str] = {
     "commented": "commented",
@@ -94,6 +93,7 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     return widgets
 
 
+NARROW = 100  # a terminal fewer columns wide opens the detail full screen
 _FIRST_SCREEN = 8  # Markdown blocks drawn at once; about a screenful
 _BATCH = 8  # widgets (headings and meta lines too) mounted per step of the fill
 _PAUSE = 0.1
@@ -119,10 +119,11 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
     BINDINGS = [
         *WRITE_BINDINGS,
         # Priority, or the scrolling body would take the arrows for horizontal scrolling.
-        Binding("left", "step(-1)", "Previous", priority=True),
-        Binding("right", "step(1)", "Next", priority=True),
-        Binding("z", "toggle_full", "Full screen"),
-        Binding("o", "open_in_browser", "Open in browser"),
+        # Left to `?`, so the footer fits 80 columns with Copy shown.
+        Binding("left", "step(-1)", "Previous", priority=True, show=False),
+        Binding("right", "step(1)", "Next", priority=True, show=False),
+        *LINK_BINDINGS,
+        Binding("w", "toggle_full", "Full screen"),
         Binding("h", "toggle_activity", "Activity"),
         Binding("m", "move", "Move"),
         Binding("escape", "dismiss", "Close"),
@@ -186,6 +187,7 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         self.writer.changed.subscribe(
             self, lambda writes: self.on_changed([w.detail.issue for w in writes])
         )
+        self.set_class(self.app.size.width < NARROW, "full")
         self.show_issue()
 
     def on_changed(self, changed: Sequence[Issue]) -> None:
@@ -263,9 +265,6 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
 
     def action_toggle_full(self) -> None:
         self.toggle_class("full")
-
-    def action_open_in_browser(self) -> None:
-        webbrowser.open(self.issue.url)
 
     def action_move(self) -> None:
         self.mover.pick(self.issue)
