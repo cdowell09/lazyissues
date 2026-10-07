@@ -129,8 +129,8 @@ async def found(github: FakeGitHub, number: int) -> Issue:
 
 async def test_fake_adds_the_repos_label_for_a_status_or_creates_it():
     github = writable()
-    await github.add_label("o/r", 1, "In Progress")  # the repo has `in-progress`
-    await github.add_label("o/r", 1, "In Review")  # the repo has no such label
+    await github.add_labels("o/r", 1, ["In Progress"])  # the repo has `in-progress`
+    await github.add_labels("o/r", 1, ["In Review"])  # the repo has no such label
     await github.remove_labels("o/r", 1, ["todo"])
 
     assert (await found(github, 1)).labels == ("bug", "in-progress", "In Review")
@@ -177,7 +177,7 @@ async def test_fake_rejects_writes_to_a_read_only_repo():
     github = writable()
     github.read_only.add("o/r")
     with pytest.raises(GitHubError, match="Resource not accessible"):
-        await github.add_label("o/r", 1, "Todo")
+        await github.add_labels("o/r", 1, ["Todo"])
     assert (await found(github, 1)).labels == ("bug", "todo")
 
 
@@ -290,3 +290,13 @@ async def test_fake_rejects_edits_to_a_read_only_repo():
     with pytest.raises(GitHubError, match="Resource not accessible"):
         await github.update_issue("o/r", 1, {"title": "Renamed"})
     assert [issue.title for issue in github.issues] == ["One"]
+
+
+async def test_fake_lists_are_copies_a_caller_can_change():
+    github = FakeGitHub(viewer="me", labels={"o/r": ["bug"]}, assignable={"o/r": ["me"]})
+
+    (await github.repo_labels("o/r")).append("intruder")
+    (await github.assignable_users("o/r")).append("intruder")
+
+    assert await github.repo_labels("o/r") == ["bug"]
+    assert await github.assignable_users("o/r") == ["me"]

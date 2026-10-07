@@ -18,9 +18,11 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingsMap
+from textual.coordinate import Coordinate
 from textual.reactive import var
 from textual.selection import Selection
 from textual.strip import Strip
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
@@ -49,6 +51,7 @@ from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 # landed on the cell beside it. Columns stay put.
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
+SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
 CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
 DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
 # How a row stands out, by its table component class (`IssueTable.highlights`).
@@ -164,13 +167,16 @@ class IssueList(IssueActions, Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.writer = writer  # the app's, shared by every view
+        self._loaded = False  # the first refresh has started
         self._read_again = False  # a reload was asked for during a refresh
+        self._search_timer: Timer | None = None  # filters once typing pauses
         self.rules = StatusRules(config)
         self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
         # Each table row's group, and its issue's row (None for a header or the empty message).
         self._rows: list[tuple[str, Row | None]] = []
         self._groups: dict[str, Group] = {}  # the shown groups, by name
         self.error: str | None = None  # why the latest refresh failed
+        self._stale = False  # changed while hidden: redraw when shown
 
     @property
     def issues(self) -> list[Issue]:
@@ -195,14 +201,33 @@ class IssueList(IssueActions, Widget):
         self.mover.changed.subscribe(self, self._on_moved)
         self.writer.changed.subscribe(self, self._on_written)
         if self.store.issues:
+            self.redraw()
+
+    def on_show(self) -> None:
+        if not self._loaded:  # the first refresh waits until the tab is shown
+            self._loaded = True
+            self.reload()
+        if self._stale:
             self.show()
-        self.reload()
+
+    def on_unmount(self) -> None:
+        self.store.flush()  # the snapshot of changes still waiting to be saved
+
+    def redraw(self) -> None:
+        """Draw now if shown; a hidden tab draws when it's next shown."""
+        if all(widget.display for widget in self.ancestors_with_self):
+            self.show()
+        else:
+            self._stale = True
 
     def watch_refreshing(self, refreshing: bool) -> None:
         self.set_class(refreshing, "-refreshing")
 
-    def watch_state(self) -> None:
-        self.show()
+    def watch_state(self, old: ViewState, new: ViewState) -> None:
+        if old.selected != new.selected and replace(old, selected=new.selected) == new:
+            self._show_selection()  # only checkboxes changed: no rebuild, so cursor and scroll stay
+        else:
+            self.show()
 
     def configure(self, config: Config) -> None:
         """Use `config` from now on: redraw by its statuses and refresh with its roster.
@@ -214,11 +239,15 @@ class IssueList(IssueActions, Widget):
             self.set_reactive(IssueList.state, replace(self.state, show_done=show_done))
         self.config = config
         self.rules = StatusRules(config)
-        self.show()
+        self.redraw()
         self.reload()
 
     def reload(self) -> None:
-        """Refresh from GitHub in the background; during a refresh, read again after it."""
+        """Refresh from GitHub in the background; during a refresh, read again after it.
+
+        A tab not yet shown only waits for its first show, which refreshes it."""
+        if not self._loaded:
+            return
         if self.refreshing:
             self._read_again = True
             return
@@ -246,7 +275,7 @@ class IssueList(IssueActions, Widget):
             self.error = None
         finally:
             self.refreshing = False
-        self.show()
+        self.redraw()
 
     async def _read(self, with_done: bool) -> list[Issue]:
         since = None
@@ -262,6 +291,7 @@ class IssueList(IssueActions, Widget):
 
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
+        self._stale = False
         table = self.query_one(IssueTable)
         row, selected = table.cursor_row, None
         if table.rows:
@@ -284,13 +314,28 @@ class IssueList(IssueActions, Widget):
             # With nothing loaded, a failed refresh's error stays after its toast goes.
             message = "No issues match." if self.state.filtering else self.error or self.EMPTY
             table.add_row("", "", message, *[""] * (len(COLUMNS) - 3))
-        table.highlights = [
-            GROUP_ROW if row is None else CHECKED_ROW if self._checked([row.issue.key]) else None
-            for _, row in self._rows
-        ]
+        table.highlights = self._highlights()
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)
         table.move_cursor(row=row)
+        self._show_filters()
+
+    def _highlights(self) -> list[str | None]:
+        return [
+            GROUP_ROW if row is None else CHECKED_ROW if self._checked([row.issue.key]) else None
+            for _, row in self._rows
+        ]
+
+    def _show_selection(self) -> None:
+        """Redraw the checkboxes and checked rows' tint where they changed, in place."""
+        table = self.query_one(IssueTable)
+        for at, (group, row) in enumerate(self._rows):
+            keys = [row.issue.key] if row else [issue.key for issue in self._groups[group].issues]
+            mark = self._mark(keys)
+            if table.get_cell_at(Coordinate(at, 0)).plain != mark.plain:
+                table.update_cell_at(Coordinate(at, 0), mark)
+        table.highlights = self._highlights()
+        table.refresh()  # the tint is drawn from `highlights`, outside the cells
         self._show_filters()
 
     def _checked(self, keys: Iterable[str]) -> bool:
@@ -307,7 +352,7 @@ class IssueList(IssueActions, Widget):
 
     def _cells(self, row: Row) -> tuple[str | Text, ...]:
         issue = row.issue
-        status = self.rules.status_of(issue)
+        status = row.status
         pending = self.store.moves.pending(issue.key)
         tree = "".join("│ " if more else "  " for more in row.continues[:-1])
         if row.continues:
@@ -388,15 +433,18 @@ class IssueList(IssueActions, Widget):
         if issue.key in table.rows:
             table.move_cursor(row=table.get_row_index(issue.key))
 
-    def _on_moved(self, _: Issue) -> None:
-        self.store.apply_moves()
-        self.show()
+    def _on_moved(self, moved: Sequence[Issue]) -> None:
+        keys = {issue.key for issue in moved}
+        if any(issue.key in keys for issue in self.store.issues):
+            self.store.apply_moves()
+            self.redraw()
 
-    def _on_written(self, written: Written) -> None:
-        if self.store.update(written.detail.issue, written.sent_at):
-            self.show()
-        elif written.regroups:  # only this tab's search knows whether it belongs here now
-            self.reload()
+    def _on_written(self, writes: Sequence[Written]) -> None:
+        shown = [self.store.update(w.detail.issue, w.sent_at) for w in writes]
+        if any(shown):
+            self.redraw()
+        if any(w.regroups and not on for w, on in zip(writes, shown, strict=True)):
+            self.reload()  # only this tab's search knows whether an issue belongs here now
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""
@@ -419,13 +467,24 @@ class IssueList(IssueActions, Widget):
         box.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        self.state = replace(self.state, search=event.value)
+        self._stop_search_timer()
+        self._search_timer = self.set_timer(SEARCH_PAUSE, lambda: self._search(event.value))
 
-    def on_input_submitted(self) -> None:
+    def _search(self, text: str) -> None:
+        self._stop_search_timer()
+        self.state = replace(self.state, search=text)
+
+    def _stop_search_timer(self) -> None:
+        if self._search_timer:
+            self._search_timer.stop()
+            self._search_timer = None
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._search(event.value)  # without waiting out the pause
         self._close_search()
 
     def action_clear_search(self) -> None:
-        self.state = replace(self.state, search="")
+        self._search("")
         self._close_search()
 
     def _close_search(self) -> None:

@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from listed import drawn, plain
+from listed import drawn, plain, show_tab
 from textual.widgets import DataTable
 
 from lazyissues import demo
@@ -21,8 +21,7 @@ def firsts(app: LazyIssuesApp) -> list[str]:
 
 async def shown(app: LazyIssuesApp) -> list[str]:
     async with app.run_test() as pilot:
-        await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
+        await show_tab(pilot, "milestones")
         return firsts(app)
 
 
@@ -44,8 +43,7 @@ async def test_lists_each_repos_milestones_with_progress_and_issues_by_status():
 async def test_sub_issues_hang_off_their_parent_on_tree_lines():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
+        await show_tab(pilot, "milestones")
         assert drawn(app.query_one("#milestones DataTable", DataTable))[-4:] == [
             "  ▾ lanternfish#9",  # a parent, unfolded
             "    ├ lanternfish#7",  # another sub-issue of #9 follows
@@ -69,8 +67,7 @@ async def test_pinned_milestones_limit_and_order_the_tab():
 async def test_says_when_the_repo_set_has_no_open_milestones():
     app = LazyIssuesApp(demo.config(), replace(demo.github(), milestones={}))
     async with app.run_test() as pilot:
-        await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
+        await show_tab(pilot, "milestones")
         table = app.query_one("#milestones DataTable", DataTable)
         assert [str(cell) for cell in table.get_row_at(0)][1:3] == [
             "",
@@ -82,7 +79,7 @@ async def test_says_when_the_repo_set_has_no_open_milestones():
 async def test_repo_filter_hides_other_repos_milestones():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await pilot.app.workers.wait_for_complete()
+        await show_tab(pilot, "milestones")
         app.query_one(Milestones).state = ViewState(repo="octo-dev/lanternfish")
         await pilot.pause()
         assert [row for row in firsts(app) if " / " in row] == [
@@ -91,7 +88,7 @@ async def test_repo_filter_hides_other_repos_milestones():
 
 
 class NoMilestones(FakeGitHub):
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
         raise GitHubError("Couldn't reach GitHub: timed out")
 
 

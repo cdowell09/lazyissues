@@ -41,6 +41,7 @@ class GitHub:
         self.repositories = {("o", "r", 1): repository(), ("o", "r2", 5): repository("I5")}
         self.project: dict[str, Any] | None = {"id": "P1", "field": STATUS_FIELD}
         self.users = {"sam": {"id": "U1"}}
+        self.repo_labels = list(REPO_LABELS)
         self.lookups: list[dict[str, Any]] = []
         self.mutations: list[tuple[str, dict[str, Any]]] = []
 
@@ -52,12 +53,17 @@ class GitHub:
             assert kind == name[0].upper() + name[1:]
             self.mutations.append((name, variables["input"]))
             payload = {"label": {"id": "L-new"}} if name == "createLabel" else {}
+            if name == "addAssigneesToAssignable":
+                payload = {"assignable": issue_node(1)}
             return httpx.Response(200, json={"data": {name: payload}})
         self.lookups.append(variables)
         if "repositoryOwner" in query:
             data = {"repositoryOwner": {"projectV2": self.project}}
         elif "labels(first: 100, after" in query:  # the repo's labels, paged
-            page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": REPO_LABELS}
+            page = {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": self.repo_labels,
+            }
             data = {"repository": {"labels": page}}
         elif "user(login" in query:
             data = {"user": self.users.get(variables["login"])}
@@ -77,8 +83,8 @@ def gateway(github: GitHub) -> GraphQLGateway:
     return GraphQLGateway("token", transport=httpx.MockTransport(github))
 
 
-async def test_add_label_uses_the_repos_label_spelled_any_way(gateway, github):
-    await gateway.add_label("o/r", 1, "In Progress")
+async def test_add_labels_uses_the_repos_label_spelled_any_way(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
 
     assert github.lookups == [
         {"owner": "o", "name": "r", "number": 1},
@@ -87,8 +93,8 @@ async def test_add_label_uses_the_repos_label_spelled_any_way(gateway, github):
     assert github.mutations == [("addLabelsToLabelable", {"labelableId": "I1", "labelIds": ["L2"]})]
 
 
-async def test_add_label_creates_a_label_the_repo_lacks(gateway, github):
-    await gateway.add_label("o/r", 1, "In Review")
+async def test_add_labels_creates_a_label_the_repo_lacks(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Review"])
 
     assert github.mutations == [
         ("createLabel", {"repositoryId": "R1", "name": "In Review", "color": "ededed"}),
@@ -102,6 +108,30 @@ async def test_remove_labels_sends_the_issues_label_ids(gateway, github):
     assert github.mutations == [
         ("removeLabelsFromLabelable", {"labelableId": "I1", "labelIds": ["L3"]})
     ]
+
+
+async def test_add_labels_finds_a_label_made_elsewhere_since_the_session_read_them(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
+    github.repo_labels.append({"id": "L9", "name": "In Review"})
+
+    await gateway.add_labels("o/r", 1, ["In Review"])
+
+    assert [name for name, _ in github.mutations] == ["addLabelsToLabelable"] * 2
+    assert github.mutations[-1][1]["labelIds"] == ["L9"]  # no createLabel: it exists
+
+
+async def test_remove_labels_finds_a_label_made_elsewhere_since_the_session_read_them(
+    gateway, github
+):
+    await gateway.remove_labels("o/r", 1, ["todo"])
+    github.repo_labels.append({"id": "L9", "name": "new"})
+
+    await gateway.remove_labels("o/r", 1, ["new"])
+
+    assert github.mutations[-1] == (
+        "removeLabelsFromLabelable",
+        {"labelableId": "I1", "labelIds": ["L9"]},
+    )
 
 
 async def test_project_status_options_in_board_order(gateway, github):
@@ -175,3 +205,118 @@ async def test_assign_looks_up_the_user(gateway, github):
     ]
     with pytest.raises(GitHubError, match="No GitHub user nobody"):
         await gateway.assign("o/r", 1, "nobody")
+
+
+async def test_assign_raises_when_github_silently_drops_a_login_it_cant_assign(gateway, github):
+    github.users["kim"] = {"id": "U2"}  # a user, but the canned reply leaves only sam assigned
+
+    with pytest.raises(GitHubError, match="kim can't be assigned to issues in o/r"):
+        await gateway.assign("o/r", 1, "kim")
+
+
+def requests(github: GitHub) -> int:
+    return len(github.lookups) + len(github.mutations)
+
+
+async def test_a_label_move_sends_four_requests_and_a_repeat_three(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Progress"])
+    await gateway.remove_labels("o/r", 1, ["todo"])
+    assert requests(github) == 4  # issue ID, labels, add, remove
+
+    github.repositories[("o", "r", 2)] = repository("I2")
+    before = requests(github)
+    await gateway.add_labels("o/r", 2, ["In Progress"])
+    await gateway.remove_labels("o/r", 2, ["todo"])
+    assert requests(github) - before == 3  # issue ID, add, remove
+    assert github.mutations[-2:] == [
+        ("addLabelsToLabelable", {"labelableId": "I2", "labelIds": ["L2"]}),
+        ("removeLabelsFromLabelable", {"labelableId": "I2", "labelIds": ["L3"]}),
+    ]
+
+
+async def test_a_label_created_by_one_move_serves_the_next_without_a_refetch(gateway, github):
+    await gateway.add_labels("o/r", 1, ["In Review"])
+    before = requests(github)
+    github.repositories[("o", "r", 2)] = repository("I2")
+    await gateway.add_labels("o/r", 2, ["In Review"])
+
+    assert github.mutations[-1] == (
+        "addLabelsToLabelable",
+        {"labelableId": "I2", "labelIds": ["L-new"]},
+    )
+    assert requests(github) - before == 2  # issue ID and the add: no label fetch, no create
+
+
+async def test_several_labels_go_in_one_request(gateway, github):
+    await gateway.add_labels("o/r", 1, ["bug", "In Progress", "In Review"])
+
+    assert [name for name, _ in github.mutations] == ["createLabel", "addLabelsToLabelable"]
+    assert github.mutations[-1][1]["labelIds"] == ["L1", "L2", "L-new"]
+
+
+async def test_an_issues_id_is_looked_up_once(gateway, github):
+    await gateway.reopen_issue("o/r", 1)
+    await gateway.reopen_issue("o/r", 1)
+
+    assert len(github.lookups) == 1
+
+
+async def test_a_user_id_is_looked_up_once(gateway, github):
+    await gateway.assign("o/r", 1, "sam")
+    await gateway.assign("o/r", 1, "sam")
+
+    assert sum("login" in lookup for lookup in github.lookups) == 1
+
+
+async def test_a_board_is_fetched_once(gateway, github):
+    await gateway.project_status_options("o/1")
+    await gateway.add_to_project("o/r", 1, "o/1")
+
+    assert sum("number" in lookup and "login" in lookup for lookup in github.lookups) == 1
+
+
+def issue_node(number: int) -> dict[str, Any]:
+    return {
+        "id": f"I_{number}",
+        "number": number,
+        "title": f"Issue {number}",
+        "url": f"https://github.com/o/r/issues/{number}",
+        "repository": {"nameWithOwner": "o/r"},
+        "assignees": {"nodes": [{"login": "sam"}]},
+        "labels": {"nodes": []},
+        "state": "OPEN",
+        "closedAt": None,
+        "milestone": None,
+        "parent": None,
+        "projectItems": {"nodes": []},
+    }
+
+
+async def test_a_bulk_assign_sends_one_lean_request_per_issue():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        query = body["query"]
+        if "user(login" in query:
+            return httpx.Response(200, json={"data": {"user": {"id": "U1"}}})
+        if query.lstrip().startswith("mutation"):
+            number = int(body["variables"]["input"]["assignableId"][2:])
+            payload = {"assignable": issue_node(number)}
+            return httpx.Response(200, json={"data": {"addAssigneesToAssignable": payload}})
+        nodes = [issue_node(n) for n in range(1, 51)]
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    gateway = GraphQLGateway("token", transport=httpx.MockTransport(handler))
+    issues = await gateway.search_issues("is:open")
+    sent.clear()
+
+    assigned = [await gateway.assign(i.repo, i.number, "sam") for i in issues]
+
+    mutations = [b for b in sent if b["query"].lstrip().startswith("mutation")]
+    assert len(sent) == 51  # 50 mutations and one user lookup
+    assert all("DetailFields" not in b["query"] for b in mutations)
+    assert [i.number for i in assigned] == list(range(1, 51))
+    assert assigned[0].assignees == ("sam",)

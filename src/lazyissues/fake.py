@@ -37,6 +37,7 @@ class FakeGitHub:
     # Open milestones' titles, by repo; their issue counts come from `issues`.
     milestones: dict[str, list[str]] = field(default_factory=dict)
     assignable: dict[str, list[str]] = field(default_factory=dict)  # assignable logins, by repo
+    searched: list[str] = field(default_factory=list)  # every search sent, in order
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -46,6 +47,7 @@ class FakeGitHub:
         }
 
     async def search_issues(self, query: str) -> list[Issue]:
+        self.searched.append(query)
         try:
             terms = shlex.split(query)
         except ValueError as e:  # an unclosed quote
@@ -57,7 +59,7 @@ class FakeGitHub:
         return replace(self.details.get(issue.key, IssueDetail(issue)), issue=self._current(issue))
 
     async def assignable_users(self, repo: str) -> list[str]:
-        return self.assignable.get(self._resolve(repo), [])
+        return list(self.assignable.get(self._resolve(repo), []))
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         self._writable(repo, number)
@@ -71,8 +73,7 @@ class FakeGitHub:
     ) -> IssueDetail:
         index = self._writable(repo, number)
         for login in add:
-            if repo in self.assignable and login not in self.assignable[repo]:
-                raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
+            self._assignable(repo, login)
         issue = self.issues[index]
         kept = [login for login in issue.assignees if login not in remove]
         added = [login for login in add if login not in kept]
@@ -125,16 +126,17 @@ class FakeGitHub:
                     return list(board.status_options)
         raise GitHubError(f"Could not resolve to a ProjectV2 with the number {project}.")
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)
         repo_labels = self.labels.setdefault(repo, [])
-        label = next((lb for lb in repo_labels if normalize(lb) == normalize(name)), None)
-        if label is None:
-            label = name
-            repo_labels.append(label)
-        issue = self.issues[index]
-        if label not in issue.labels:
-            self.issues[index] = replace(issue, labels=(*issue.labels, label))
+        for name in names:
+            label = next((lb for lb in repo_labels if normalize(lb) == normalize(name)), None)
+            if label is None:
+                label = name
+                repo_labels.append(label)
+            issue = self.issues[index]
+            if label not in issue.labels:
+                self.issues[index] = replace(issue, labels=(*issue.labels, label))
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         index = self._writable(repo, number)
@@ -174,11 +176,18 @@ class FakeGitHub:
         self.closed.discard(self.issues[index].key)
         self.issues[index] = replace(self.issues[index], closed_at=None)
 
-    async def assign(self, repo: str, number: int, login: str) -> None:
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
         index = self._writable(repo, number)
+        self._assignable(repo, login)
         issue = self.issues[index]
         if login not in issue.assignees:
             self.issues[index] = replace(issue, assignees=(*issue.assignees, login))
+        return self._current(self.issues[index])
+
+    def _assignable(self, repo: str, login: str) -> None:
+        """Refuse a login GitHub wouldn't assign to issues in `repo`, as the real one does."""
+        if repo in self.assignable and login not in self.assignable[repo]:
+            raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
 
     def _index(self, repo: str, number: int) -> int:
         for index, issue in enumerate(self.issues):
@@ -232,12 +241,12 @@ class FakeGitHub:
         return self.viewer, self.scopes
 
     async def repo_labels(self, repo: str) -> list[str]:
-        return self.labels.get(self._resolve(repo), [])
+        return list(self.labels.get(self._resolve(repo), []))
 
     async def repo_projects(self, repo: str) -> list[Project]:
         return self.projects.get(self._resolve(repo), [])
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
         repo = self._resolve(repo)
         milestones = []
         for title in self.milestones.get(repo, []):

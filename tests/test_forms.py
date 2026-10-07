@@ -6,7 +6,8 @@ import subprocess
 import sys
 from dataclasses import replace
 
-from textual.widgets import DataTable, Input, Markdown, Select, Static, TextArea
+from listed import show_tab
+from textual.widgets import DataTable, Input, Markdown, Select, Static, TabbedContent, TextArea
 
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
@@ -138,6 +139,12 @@ async def test_a_comment_reloads_no_tab_and_an_assignment_reloads_the_others():
     gateway = recording()
     app = app_on(gateway)
     async with app.run_test() as pilot:
+        await settle(pilot)
+        tabs = app.query_one(TabbedContent)
+        for tab in ("tab-1", "tab-2", "tab-3", "tab-0"):  # tabs not yet shown wait to be
+            tabs.active = tab
+            await settle(pilot)
+        app.query_one("#my-work").query_one(DataTable).focus()
         await select_first_issue(pilot)
         gateway.searches.clear()
 
@@ -410,7 +417,8 @@ async def test_c_creates_an_issue_with_its_status_label_in_a_label_backed_repo()
         assert (created.issue.labels, created.issue.milestone) == (("doing",), "v2")
         cached = app.details["o/r#3"]
         assert (cached.body, cached.issue.milestone) == ("Body text", "v2")
-        # Unassigned lists new issues, so it reloads to show this one.
+        # Unassigned lists new issues, so it shows this one when first opened.
+        await show_tab(pilot, "unassigned")
         assert "o/r#3" in [i.key for i in app.query_one("#unassigned", IssueList).store.issues]
 
 
@@ -509,3 +517,62 @@ async def test_create_needs_a_title_and_works_from_the_detail():
         await settle(pilot)
         assert isinstance(app.screen, IssueDetailScreen)
         assert (await gateway.issue_detail("o/r", 3)).issue.title == "From the detail"
+
+
+class CountingDetails(FakeGitHub):
+    """Counts detail fetches."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.detail_fetches = 0
+
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+        self.detail_fetches += 1
+        return await super().issue_detail(repo, number)
+
+
+def counting() -> CountingDetails:
+    fake = github()
+    return CountingDetails(
+        viewer="me",
+        issues=fake.issues,
+        details=fake.details,
+        labels=fake.labels,
+        milestones=fake.milestones,
+        assignable=fake.assignable,
+    )
+
+
+async def test_assign_opens_without_a_detail_fetch_and_keeps_an_assignee_added_since_the_list():
+    gateway = counting()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        gateway.detail_fetches = 0
+
+        await pilot.press("a")
+        await settle(pilot)
+        assert gateway.detail_fetches == 0
+
+        # Meanwhile someone assigns sam on GitHub; I add kim.
+        gateway.issues[0] = replace(gateway.issues[0], assignees=("me", "sam"))
+        await type_text(pilot, "kim")
+        await pilot.press("tab", "space", "ctrl+s")
+        await settle(pilot)
+
+        assert (await gateway.issue_detail("o/r", 1)).issue.assignees == ("me", "sam", "kim")
+
+
+async def test_edit_opens_from_the_detail_cache_when_it_holds_the_issue():
+    gateway = counting()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        app.details["o/r#1"] = IssueDetail(issue(1, "todo", milestone="v1"), body="Cached body")
+        gateway.detail_fetches = 0
+
+        await pilot.press("e")
+        await settle(pilot)
+
+        assert gateway.detail_fetches == 0
+        assert app.screen.query_one("#body", TextArea).text == "Cached body"

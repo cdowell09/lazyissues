@@ -1,3 +1,5 @@
+import pytest
+
 from lazyissues.config import Config, Repo, Status
 from lazyissues.models import Issue, Milestone
 from lazyissues.statuses import DONE, NO_STATUS, StatusRules
@@ -252,3 +254,33 @@ def test_progress_bar_fills_with_the_share_of_done_issues():
     assert progress_bar(3, 8) == "████░░░░░░ 3/8"
     assert progress_bar(0, 0) == "░░░░░░░░░░ 0/0"
     assert progress_bar(5, 5) == "██████████ 5/5"
+
+
+class CountingRules(StatusRules):
+    calls = 0
+
+    def status_of(self, issue):
+        self.calls += 1
+        return super().status_of(issue)
+
+
+GROUPINGS = {
+    "status": lambda rules: by_status(rules),
+    "assignee": lambda rules: by_assignee(rules, ["ana", "bo"]),
+    "milestone": lambda rules: by_milestone(rules, MILESTONES),
+}
+
+
+@pytest.mark.parametrize("name", GROUPINGS)
+def test_each_shown_issues_status_is_resolved_once_whatever_the_grouping(name):
+    rules = CountingRules(CONFIG)
+    issues = [
+        issue(1, "todo", assignees=("ana",), milestone="v1"),
+        issue(2, "in-progress", assignees=("bo",), milestone="v1"),
+        issue(3, "todo", assignees=("ana",), closed=True),  # hidden before any status is read
+    ]
+
+    groups = visible_groups(issues, GROUPINGS[name](rules), rules, ViewState(focus="Todo"))
+
+    assert rules.calls == 2
+    assert [r.status.name for g in groups for r in g.rows] == ["Todo"]

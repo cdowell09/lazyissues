@@ -8,10 +8,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from lazyissues.models import Issue, Milestone
-from lazyissues.statuses import StatusRules
+from lazyissues.statuses import IssueStatus, StatusRules
 
-# Splits issues into named groups in display order; a tab's grouping.
-Grouping = Callable[[list[Issue]], list[tuple[str, list[Issue]]]]
+# An issue's status, as `visible_groups` resolved it once for the redraw.
+StatusOf = Callable[[Issue], IssueStatus]
+
+# Splits issues into named groups in display order, given each one's status; a tab's grouping.
+Grouping = Callable[[list[Issue], StatusOf], list[tuple[str, list[Issue]]]]
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class Row:
     """An issue as a group lists it: its sub-issues in the group follow it, indented."""
 
     issue: Issue
+    status: IssueStatus  # resolved once for the redraw, as the cells show it
     # One entry per parent above it in the group, outermost first: whether a later
     # sub-issue of that parent follows, so the tree's line carries on down past this row.
     continues: tuple[bool, ...] = ()
@@ -98,15 +102,18 @@ class Group:
 
 
 def by_status(rules: StatusRules) -> Grouping:
-    return lambda issues: [(g.name, g.issues) for g in rules.group(issues)]
+    return lambda issues, status_of: [(g.name, g.issues) for g in rules.group(issues, status_of)]
 
 
 def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
     """A group per member, even with nothing assigned, ordered by how many active
     issues each has; within a member, active issues first, then status order."""
 
-    def group(issues: list[Issue]) -> list[tuple[str, list[Issue]]]:
-        ordered = sorted(_in_status_order(rules, issues), key=lambda i: not _active(rules, i))
+    def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
+        ordered = sorted(
+            _in_status_order(rules, issues, status_of),
+            key=lambda i: not rules.is_active(status_of(i).name),
+        )
         groups = [
             # GitHub logins ignore case, and the roster is typed by hand.
             (
@@ -115,7 +122,7 @@ def by_assignee(rules: StatusRules, members: list[str]) -> Grouping:
             )
             for member in members
         ]
-        return sorted(groups, key=lambda g: -sum(_active(rules, i) for i in g[1]))
+        return sorted(groups, key=lambda g: -sum(rules.is_active(status_of(i).name) for i in g[1]))
 
     return group
 
@@ -124,8 +131,8 @@ def by_milestone(rules: StatusRules, milestones: list[Milestone]) -> Grouping:
     """A group per milestone, in the order given, even with no issues; issues in status
     order."""
 
-    def group(issues: list[Issue]) -> list[tuple[str, list[Issue]]]:
-        ordered = _in_status_order(rules, issues)
+    def group(issues: list[Issue], status_of: StatusOf) -> list[tuple[str, list[Issue]]]:
+        ordered = _in_status_order(rules, issues, status_of)
         return [
             (m.name, [i for i in ordered if (i.repo, i.milestone) == (m.repo, m.title)])
             for m in milestones
@@ -151,22 +158,22 @@ def progress_bar(done: int, total: int) -> str:
 def visible_groups(
     issues: list[Issue], grouping: Grouping, rules: StatusRules, state: ViewState
 ) -> list[Group]:
-    matching = [
-        issue
-        for issue in _filtered(issues, rules, state)
-        if state.focus in (None, rules.status_of(issue).name)
-    ]
+    filtered = _filtered(issues, rules, state)
+    statuses = {issue.key: rules.status_of(issue) for issue in filtered}  # once each
+    matching = [i for i in filtered if state.focus in (None, statuses[i.key].name)]
     groups = []
-    for name, members in grouping(matching):
+    for name, members in grouping(matching, lambda issue: statuses[issue.key]):
         if not members and not _contains(name, state.search):
             continue  # an empty member group shows unless a search names someone else
         folded = name in state.folded
-        rows = [] if folded else _nested(members, state.folded)
+        rows = [] if folded else _nested(members, state.folded, statuses)
         groups.append(Group(name, members, rows, folded))
     return groups
 
 
-def _nested(issues: list[Issue], folded: frozenset[str]) -> list[Row]:
+def _nested(
+    issues: list[Issue], folded: frozenset[str], statuses: dict[str, IssueStatus]
+) -> list[Row]:
     """`issues` in order, with each one's sub-issues in the list moved under it; those
     of a parent in `folded` are left out."""
     keys = {issue.key for issue in issues}
@@ -179,7 +186,7 @@ def _nested(issues: list[Issue], folded: frozenset[str]) -> list[Row]:
     def add(issue: Issue, continues: tuple[bool, ...]) -> None:
         subs = sub_issues.get(issue.key, [])
         hide = bool(subs) and issue.key in folded
-        rows.append(Row(issue, continues, bool(subs), hide))
+        rows.append(Row(issue, statuses[issue.key], continues, bool(subs), hide))
         shown = [] if hide else subs
         for at, sub in enumerate(shown):
             add(sub, (*continues, at < len(shown) - 1))
@@ -224,9 +231,5 @@ def _contains(field: str, text: str) -> bool:
     return text.casefold() in field.casefold()
 
 
-def _in_status_order(rules: StatusRules, issues: list[Issue]) -> list[Issue]:
-    return [issue for group in rules.group(issues) for issue in group.issues]
-
-
-def _active(rules: StatusRules, issue: Issue) -> bool:
-    return rules.is_active(rules.status_of(issue).name)
+def _in_status_order(rules: StatusRules, issues: list[Issue], status_of: StatusOf) -> list[Issue]:
+    return [issue for group in rules.group(issues, status_of) for issue in group.issues]

@@ -10,6 +10,7 @@ from lazyissues.models import Event, Issue, Milestone, Project, ProjectField
 
 def node(number: int) -> dict:
     return {
+        "id": f"I_{number}",
         "number": number,
         "title": f"Issue {number}",
         "url": f"https://github.com/o/r/issues/{number}",
@@ -297,6 +298,14 @@ async def test_whoami_gives_the_login_and_the_token_scopes_from_the_response_hea
     assert await gateway(handler).whoami() == ("me", scopes)
 
 
+async def test_whoami_is_requested_once_per_session():
+    handler, sent = replying({"viewer": {"login": "me"}})
+    github = gateway(handler)
+
+    assert await github.whoami() == await github.whoami()
+    assert len(sent) == 1
+
+
 async def test_repo_labels_follows_pages():
     sent = []
 
@@ -531,3 +540,46 @@ async def test_update_issue_clears_the_milestone():
     await gateway(handler).update_issue("o/r", 5, {"milestone": None})
 
     assert mutation(sent[-1]) == ("updateIssue", {"id": "I_5", "milestoneId": None})
+
+
+async def test_repeat_lookups_of_assignable_users_and_milestones_send_one_request_each():
+    users = page([{"login": "me"}])
+    node = {"title": "v1", "open": {"totalCount": 1}, "closed": {"totalCount": 0}}
+    handler, sent = replying(
+        {"repository": {"assignableUsers": users}},
+        {"repository": {"milestones": page([node])}},
+    )
+    github = gateway(handler)
+
+    for _ in range(2):
+        await github.assignable_users("o/r")
+        await github.repo_milestones("o/r")
+
+    assert len(sent) == 2
+
+
+async def test_a_caller_changing_a_returned_list_doesnt_change_the_sessions_cache():
+    handler, _ = replying(
+        {"repository": {"assignableUsers": page([{"login": "me"}])}},
+        {"repository": {"labels": page([{"id": "L1", "name": "bug"}])}},
+    )
+    github = gateway(handler)
+
+    (await github.assignable_users("o/r")).append("intruder")
+    (await github.repo_labels("o/r")).append("intruder")
+
+    assert await github.assignable_users("o/r") == ["me"]
+    assert await github.repo_labels("o/r") == ["bug"]
+
+
+async def test_a_fresh_milestone_read_refetches_for_current_counts():
+    def milestones(open: int) -> dict:
+        node = {"title": "v1", "open": {"totalCount": open}, "closed": {"totalCount": 0}}
+        return {"repository": {"milestones": page([node])}}
+
+    handler, sent = replying(milestones(1), milestones(2))
+    github = gateway(handler)
+
+    await github.repo_milestones("o/r")
+    assert (await github.repo_milestones("o/r", fresh=True))[0].open == 2
+    assert len(sent) == 2

@@ -4,8 +4,8 @@ import asyncio
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
@@ -26,11 +26,27 @@ from lazyissues.statuses import normalize
 
 API_URL = "https://api.github.com/graphql"
 SEARCH_LIMIT = 1000  # GitHub search never returns more than this
+MAX_RETRY_WAIT = 10  # seconds; a rate-limited read waits at most this long to retry
 LABEL_COLOR = "ededed"  # GitHub's gray, for a status label lazyissues creates
 
 
 class GitHubError(Exception):
     pass
+
+
+class RateLimited(GitHubError):
+    """GitHub's rate limit, saying when to try again; `retry_after` is seconds, if it said."""
+
+    def __init__(self, headers: httpx.Headers) -> None:
+        self.retry_after: int | None = None
+        when = "later"
+        if (wait := headers.get("retry-after", "")).isdigit():
+            self.retry_after = int(wait)
+            when = f"in {wait} seconds"
+        elif (reset := headers.get("x-ratelimit-reset", "")).isdigit():
+            at = datetime.fromtimestamp(int(reset), UTC)
+            when = f"at {at:%H:%M} UTC"
+        super().__init__(f"GitHub's rate limit was reached; try again {when}.")
 
 
 class Gateway(Protocol):
@@ -44,7 +60,10 @@ class Gateway(Protocol):
 
     async def repo_projects(self, repo: str) -> list[Project]: ...
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]: ...
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """The open milestones; their counts are as of the session's last read unless `fresh`,
+        which skips any cache for counts that must be current."""
+        ...
 
     async def assignable_users(self, repo: str) -> list[str]: ...
 
@@ -52,10 +71,12 @@ class Gateway(Protocol):
         """The Status field's options of project "owner/number", in board order."""
         ...
 
-    # Writes. Each issue is `repo` ("owner/name") and `number`.
+    # Writes. Each issue is `repo` ("owner/name") and `number`. They return nothing, except
+    # `assign`, which returns the issue, and the ones below it, which return its detail.
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
-        """Add the repo's label matching `name` as statuses match, creating it if none does."""
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
+        """Add, in one request, the repo's labels matching `names` as statuses match, creating
+        any the repo lacks."""
         ...
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None: ...
@@ -74,10 +95,11 @@ class Gateway(Protocol):
 
     async def reopen_issue(self, repo: str, number: int) -> None: ...
 
-    async def assign(self, repo: str, number: int, login: str) -> None: ...
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
+        """Add `login` to the assignees, returning the issue as GitHub has it."""
+        ...
 
     # These writes return the issue's detail as GitHub has it once the write is done.
-
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail: ...
 
     async def change_assignees(
@@ -114,7 +136,7 @@ def gh_token() -> str:
 # Every query that builds an `Issue` selects these fields, so `_issue` can read them.
 _ISSUE_FIELDS = """
 fragment IssueFields on Issue {
-  number title url state closedAt
+  id number title url state closedAt
   repository { nameWithOwner }
   assignees(first: 10) { nodes { login } }
   labels(first: 20) { nodes { name } }
@@ -386,7 +408,13 @@ def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
 
 
 class GraphQLGateway:
-    def __init__(self, token: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._sleep = sleep
         if transport is None and "pytest" in sys.modules:
             raise RuntimeError("Tests must not reach GitHub; pass a fake transport.")
         self._client = httpx.AsyncClient(
@@ -394,26 +422,62 @@ class GraphQLGateway:
             headers={"Authorization": f"bearer {token}"},
             timeout=30,
         )
+        # Per-session caches: IDs never change, and the rest only changes by our own writes.
+        self._issue_ids: dict[tuple[str, int], str] = {}
+        self._repo_ids: dict[str, str] = {}
+        self._user_ids: dict[str, str] = {}
+        self._label_nodes: dict[str, list[dict[str, Any]]] = {}
+        self._boards: dict[str, dict[str, Any]] = {}
+        self._milestone_nodes: dict[str, list[dict[str, Any]]] = {}
+        self._assignable: dict[str, list[str]] = {}
+        self._viewer: tuple[str, set[str]] | None = None
 
-    async def _query(self, query: str, **variables: Any) -> dict[str, Any]:
-        return (await self._send(query, **variables))[0]
+    async def _query(self, query: str, *, read: bool, **variables: Any) -> dict[str, Any]:
+        return (await self._send(query, read=read, **variables))[0]
 
-    async def _send(self, query: str, **variables: Any) -> tuple[dict[str, Any], httpx.Headers]:
-        """The query's data, and the response headers."""
+    async def _send(
+        self, query: str, *, read: bool, **variables: Any
+    ) -> tuple[dict[str, Any], httpx.Headers]:
+        """The query's data, and the response headers.
+
+        A rate-limited read waits out a `Retry-After` of `MAX_RETRY_WAIT` seconds or less
+        and goes again once; a longer wait raises at once. A write (`read` False) never goes
+        twice, as GitHub may have applied it.
+        """
+        try:
+            return await self._post(query, variables)
+        except RateLimited as limit:
+            wait = limit.retry_after
+            if not read or wait is None or wait > MAX_RETRY_WAIT:
+                raise
+        await self._sleep(wait)
+        return await self._post(query, variables)
+
+    async def _post(
+        self, query: str, variables: dict[str, Any]
+    ) -> tuple[dict[str, Any], httpx.Headers]:
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}
             )
         except httpx.HTTPError as e:
             raise GitHubError(f"Couldn't reach GitHub: {e}") from e
+        headers = response.headers
+        if response.status_code == 429 or (
+            response.status_code == 403
+            and ("retry-after" in headers or headers.get("x-ratelimit-remaining") == "0")
+        ):
+            raise RateLimited(headers)
         if response.status_code == 401:
             raise GitHubError("GitHub rejected the `gh` token. Run `gh auth login`.")
         if response.is_error:
             raise GitHubError(f"GitHub returned HTTP {response.status_code}.")
         body = response.json()
         if errors := body.get("errors"):
+            if any(e.get("type") == "RATE_LIMITED" for e in errors):
+                raise RateLimited(headers)
             raise GitHubError("; ".join(e["message"] for e in errors))
-        return body["data"], response.headers
+        return body["data"], headers
 
     async def _nodes(
         self, query: str, connection: Callable[[dict[str, Any]], Any], **variables: Any
@@ -422,7 +486,7 @@ class GraphQLGateway:
         nodes: list[dict[str, Any]] = []
         after = None
         while len(nodes) < SEARCH_LIMIT:
-            page = connection(await self._query(query, after=after, **variables))
+            page = connection(await self._query(query, read=True, after=after, **variables))
             nodes += [node for node in page["nodes"] if node]
             if not page["pageInfo"]["hasNextPage"]:
                 break
@@ -430,18 +494,23 @@ class GraphQLGateway:
         return nodes
 
     async def search_issues(self, query: str) -> list[Issue]:
-        return [_issue(node) for node in await self._nodes(_SEARCH, lambda d: d["search"], q=query)]
+        nodes = await self._nodes(_SEARCH, lambda d: d["search"], q=query)
+        for node in nodes:  # remember the IDs, so a write needs no lookup
+            self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+        return [_issue(node) for node in nodes]
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
-        data = await self._query(_DETAIL, owner=owner, name=name, number=number)
+        data = await self._query(_DETAIL, read=True, owner=owner, name=name, number=number)
         return _detail(data["repository"]["issue"])
 
     async def whoami(self) -> tuple[str, set[str]]:
         """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
-        data, headers = await self._send(_VIEWER)
-        scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
-        return data["viewer"]["login"], scopes - {""}
+        if self._viewer is None:
+            data, headers = await self._send(_VIEWER, read=True)
+            scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
+            self._viewer = data["viewer"]["login"], scopes - {""}
+        return self._viewer
 
     async def repo_labels(self, repo: str) -> list[str]:
         return [label["name"] for label in await self._labels(repo)]
@@ -449,7 +518,7 @@ class GraphQLGateway:
     async def repo_projects(self, repo: str) -> list[Project]:
         """The open projects linked to `repo`."""
         owner, name = repo.split("/")
-        data = await self._query(_PROJECTS, owner=owner, name=name)
+        data = await self._query(_PROJECTS, read=True, owner=owner, name=name)
         return [
             Project(
                 f"{_login(node['owner'])}/{node['number']}",
@@ -460,34 +529,45 @@ class GraphQLGateway:
             if node and not node["closed"]
         ]
 
-    async def repo_milestones(self, repo: str) -> list[Milestone]:
-        """`repo`'s open milestones, soonest due first, with their issue counts."""
+    async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+        """`repo`'s open milestones, soonest due first, with their issue counts (as of the
+        last read, unless `fresh`)."""
         return [
             Milestone(repo, node["title"], node["open"]["totalCount"], node["closed"]["totalCount"])
-            for node in await self._milestones(repo)
+            for node in await self._milestones(repo, fresh)
         ]
 
     async def project_status_options(self, project: str) -> list[str]:
         return [option["name"] for option in (await self._project(project))["field"]["options"]]
 
-    async def add_label(self, repo: str, number: int, name: str) -> None:
-        target = await self._write_target(repo, number)
-        label = _named(await self._labels(repo), name)
-        if label is None:
-            label_input = {"repositoryId": target["id"], "name": name, "color": LABEL_COLOR}
-            created = await self._mutate("createLabel", label_input, "label { id }")
-            label = created["label"]
-        await self._mutate(
-            "addLabelsToLabelable",
-            {"labelableId": target["issue"]["id"], "labelIds": [label["id"]]},
+    async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
+        issue_id, labels = await asyncio.gather(
+            self._issue_id(repo, number), self._labels_with(repo, names)
         )
+        ids = []
+        for name in names:
+            label = _named(labels, name)
+            if label is None:
+                label_input = {
+                    "repositoryId": await self._repo_id(repo),
+                    "name": name,
+                    "color": LABEL_COLOR,
+                }
+                created = (await self._mutate("createLabel", label_input, "label { id }"))["label"]
+                label = {"id": created["id"], "name": name}
+                labels.append(label)
+                self._label_nodes[repo].append(label)  # the next move finds it
+            ids.append(label["id"])
+        await self._mutate("addLabelsToLabelable", {"labelableId": issue_id, "labelIds": ids})
 
     async def remove_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
-        issue = (await self._write_target(repo, number))["issue"]
-        ids = [label["id"] for label in issue["labels"]["nodes"] if label["name"] in names]
+        issue_id, labels = await asyncio.gather(
+            self._issue_id(repo, number), self._labels_with(repo, names)
+        )
+        ids = [label["id"] for label in labels if label["name"] in names]
         if ids:
             await self._mutate(
-                "removeLabelsFromLabelable", {"labelableId": issue["id"], "labelIds": ids}
+                "removeLabelsFromLabelable", {"labelableId": issue_id, "labelIds": ids}
             )
 
     async def add_to_project(self, repo: str, number: int, project: str) -> None:
@@ -529,25 +609,31 @@ class GraphQLGateway:
         await self._mutate("reopenIssue", {"issueId": await self._issue_id(repo, number)})
 
     async def assignable_users(self, repo: str) -> list[str]:
-        owner, name = repo.split("/", 1)
-        users = await self._nodes(
-            _ASSIGNABLE_USERS,
-            lambda d: d["repository"]["assignableUsers"],
-            owner=owner,
-            name=name,
-        )
-        return [user["login"] for user in users]
+        if repo not in self._assignable:
+            owner, name = repo.split("/", 1)
+            users = await self._nodes(
+                _ASSIGNABLE_USERS,
+                lambda d: d["repository"]["assignableUsers"],
+                owner=owner,
+                name=name,
+            )
+            self._assignable[repo] = [user["login"] for user in users]
+        return list(self._assignable[repo])
 
     async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
         fields = {"subjectId": await self._issue_id(repo, number), "body": body}
         return await self._write("addComment", fields, "subject")
 
-    async def assign(self, repo: str, number: int, login: str) -> None:
+    async def assign(self, repo: str, number: int, login: str) -> Issue:
         issue_id = await self._issue_id(repo, number)
-        await self._mutate(
-            "addAssigneesToAssignable",
-            {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]},
-        )
+        fields = {"assignableId": issue_id, "assigneeIds": [await self._user_id(login)]}
+        returning = "assignable { ...IssueFields }"
+        data = await self._mutate("addAssigneesToAssignable", fields, returning, _ISSUE_FIELDS)
+        assigned = _issue(data["assignable"])
+        if login.casefold() not in {a.casefold() for a in assigned.assignees}:
+            # GitHub drops a login it can't assign without saying so.
+            raise GitHubError(f"{login} can't be assigned to issues in {repo}.")
+        return assigned
 
     async def change_assignees(
         self, repo: str, number: int, add: Sequence[str], remove: Sequence[str]
@@ -577,10 +663,12 @@ class GraphQLGateway:
         return detail or await self.issue_detail(repo, number)
 
     async def _user_id(self, login: str) -> str:
-        user = (await self._query(_USER, login=login))["user"]
-        if user is None:
-            raise GitHubError(f"No GitHub user {login}.")
-        return user["id"]
+        if login not in self._user_ids:
+            user = (await self._query(_USER, read=True, login=login))["user"]
+            if user is None:
+                raise GitHubError(f"No GitHub user {login}.")
+            self._user_ids[login] = user["id"]
+        return self._user_ids[login]
 
     async def create_issue(
         self,
@@ -591,10 +679,8 @@ class GraphQLGateway:
         labels: Sequence[str] = (),
         milestone: str | None = None,
     ) -> IssueDetail:
-        owner, name = repo.split("/", 1)
-        repository = (await self._query(_REPO_ID, owner=owner, name=name))["repository"]
         fields = {
-            "repositoryId": repository["id"],
+            "repositoryId": await self._repo_id(repo),
             "title": title,
             "body": body,
             "labelIds": await self._label_ids(repo, labels),
@@ -622,26 +708,47 @@ class GraphQLGateway:
         """Run `mutation` with `fields` as its input, selecting `returning`."""
         kind = mutation[0].upper() + mutation[1:]
         query = f"mutation($input: {kind}Input!) {{ {mutation}(input: $input) {{ {returning} }} }}"
-        return (await self._query(query + fragments, input=fields))[mutation]
+        return (await self._query(query + fragments, read=False, input=fields))[mutation]
 
     async def _write(self, mutation: str, fields: dict[str, Any], issue: str) -> IssueDetail:
         """Run `mutation`, and build the issue's detail from its payload's `issue` field."""
         returning = f"{issue} {{ ...DetailFields }}"
         return _detail((await self._mutate(mutation, fields, returning, _DETAIL_FIELDS))[issue])
 
-    async def _labels(self, repo: str) -> list[dict[str, Any]]:
-        """Every label of `repo`, with its ID."""
-        owner, name = repo.split("/")
-        return await self._nodes(
-            _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
+    async def _labels(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
+        """A copy of every label of `repo`, with its ID; `add_labels` keeps the cache current."""
+        if fresh or repo not in self._label_nodes:
+            owner, name = repo.split("/")
+            self._label_nodes[repo] = await self._nodes(
+                _LABELS, lambda d: d["repository"]["labels"], owner=owner, name=name
+            )
+        return list(self._label_nodes[repo])
+
+    async def _read_again_on_miss(
+        self,
+        load: Callable[..., Awaitable[list[dict[str, Any]]]],
+        repo: str,
+        found: Callable[[list[dict[str, Any]]], bool],
+    ) -> list[dict[str, Any]]:
+        """The cached nodes `load` gives, or, if `found` misses in them (GitHub may have
+        changed since the session read them), a fresh read, once."""
+        nodes = await load(repo)
+        return nodes if found(nodes) else await load(repo, fresh=True)
+
+    async def _labels_with(self, repo: str, names: Sequence[str]) -> list[dict[str, Any]]:
+        """`repo`'s labels, read again once if any of `names` isn't among them."""
+        return await self._read_again_on_miss(
+            self._labels, repo, lambda nodes: all(_named(nodes, name) for name in names)
         )
 
-    async def _milestones(self, repo: str) -> list[dict[str, Any]]:
+    async def _milestones(self, repo: str, fresh: bool = False) -> list[dict[str, Any]]:
         """Every open milestone of `repo`, soonest due first, with its ID."""
-        owner, name = repo.split("/", 1)
-        return await self._nodes(
-            _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
-        )
+        if fresh or repo not in self._milestone_nodes:
+            owner, name = repo.split("/", 1)
+            self._milestone_nodes[repo] = await self._nodes(
+                _MILESTONES, lambda d: d["repository"]["milestones"], owner=owner, name=name
+            )
+        return list(self._milestone_nodes[repo])
 
     async def _label_ids(self, repo: str, labels: Sequence[str]) -> list[str]:
         if not labels:
@@ -652,28 +759,46 @@ class GraphQLGateway:
     async def _milestone_id(self, repo: str, milestone: str | None) -> str | None:
         if milestone is None:
             return None
-        ids = {m["title"]: m["id"] for m in await self._milestones(repo)}
+        nodes = await self._read_again_on_miss(
+            self._milestones, repo, lambda nodes: any(m["title"] == milestone for m in nodes)
+        )
+        ids = {m["title"]: m["id"] for m in nodes}
         return _known(ids, milestone, f"{repo} has no open milestone {milestone!r}.")
 
     async def _write_target(self, repo: str, number: int) -> dict[str, Any]:
+        """The issue's IDs and its live labels and project items (never cached)."""
         owner, name = repo.split("/", 1)
-        return (await self._query(_WRITE_TARGET, owner=owner, name=name, number=number))[
-            "repository"
-        ]
+        target = (
+            await self._query(_WRITE_TARGET, read=True, owner=owner, name=name, number=number)
+        )["repository"]
+        self._repo_ids[repo] = target["id"]
+        self._issue_ids[repo, number] = target["issue"]["id"]
+        return target
 
     async def _issue_id(self, repo: str, number: int) -> str:
-        return (await self._write_target(repo, number))["issue"]["id"]
+        if (repo, number) not in self._issue_ids:
+            await self._write_target(repo, number)
+        return self._issue_ids[repo, number]
+
+    async def _repo_id(self, repo: str) -> str:
+        if repo not in self._repo_ids:
+            owner, name = repo.split("/", 1)
+            data = await self._query(_REPO_ID, read=True, owner=owner, name=name)
+            self._repo_ids[repo] = data["repository"]["id"]
+        return self._repo_ids[repo]
 
     async def _project(self, project: str) -> dict[str, Any]:
         """The project "owner/number" with its Status field."""
-        login, number = project.split("/", 1)
-        owner = (await self._query(_PROJECT, login=login, number=int(number)))["repositoryOwner"]
-        board = (owner or {}).get("projectV2")
-        if board is None:
-            raise GitHubError(f"Can't find project {project}.")
-        if not board["field"]:
-            raise GitHubError(f"Project {project} has no single-select Status field.")
-        return board
+        if project not in self._boards:
+            login, number = project.split("/", 1)
+            data = await self._query(_PROJECT, read=True, login=login, number=int(number))
+            board = (data["repositoryOwner"] or {}).get("projectV2")
+            if board is None:
+                raise GitHubError(f"Can't find project {project}.")
+            if not board["field"]:
+                raise GitHubError(f"Project {project} has no single-select Status field.")
+            self._boards[project] = board
+        return self._boards[project]
 
 
 def _named(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

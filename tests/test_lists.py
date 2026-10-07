@@ -1,12 +1,14 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
-from listed import drawn, plain
+from listed import drawn, plain, show_tab
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.views import issue_list
+from lazyissues.views.issue_list import IssueList
 
 
 def table(app: LazyIssuesApp, view: str) -> DataTable:
@@ -38,7 +40,7 @@ async def settled(pilot: Pilot) -> None:
 async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await settled(pilot)
+        await show_tab(pilot, "team")
         # Issues indent under their group; a fold arrow has a column of its own.
         assert drawn(table(app, "team")) == [
             "▾ octo-dev (5)",  # the viewer, though not on the roster; two active issues
@@ -57,7 +59,7 @@ async def test_team_groups_open_issues_by_member_ordered_by_active_issues():
 async def test_unassigned_lists_open_issues_without_an_assignee_by_status():
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
-        await settled(pilot)
+        await show_tab(pilot, "unassigned")
         assert firsts(app, "unassigned") == [
             "No status (1)",
             "tidepool#18",
@@ -127,7 +129,7 @@ async def test_r_refreshes_the_tab_on_screen():
         await open_tab(pilot, "unassigned")
         github.closed.add("octo-dev/tidepool#18")
         await pilot.press("r")
-        await settled(pilot)
+        await show_tab(pilot, "unassigned")
         assert firsts(app, "unassigned") == ["Todo (1)", "lanternfish#13"]
 
 
@@ -160,3 +162,23 @@ async def test_z_on_a_sub_issue_folds_its_parent_and_the_total_still_counts_it()
 
         await pilot.press("z")  # on the parent unfolds it
         assert drawn(table(app, "team"))[4] == "    └ lanternfish#11"
+
+
+async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        view = app.query_one("#my-work", IssueList)
+        draws: list[None] = []
+        show = view.show
+        monkeypatch.setattr(view, "show", lambda: draws.append(show()))
+        # A pause no keystroke can outlast, however slow the machine: typing never draws.
+        monkeypatch.setattr(issue_list, "SEARCH_PAUSE", 60)
+        await pilot.press("slash", *"glo")
+        assert draws == []
+        # The pause after the last keystroke filters once.
+        monkeypatch.setattr(issue_list, "SEARCH_PAUSE", 0.05)
+        await pilot.press("w")
+        await pilot.pause(0.3)
+        assert len(draws) == 1
+        assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]

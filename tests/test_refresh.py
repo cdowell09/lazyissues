@@ -7,6 +7,7 @@ from textual.pilot import Pilot
 from textual.widgets import DataTable
 
 from lazyissues import demo
+from lazyissues import store as store_module
 from lazyissues.app import LazyIssuesApp
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
@@ -107,6 +108,7 @@ async def test_an_indicator_shows_while_refreshing():
 async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_path):
     store = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
     store.replace(await demo.github().search_issues("assignee:@me"), requested_at=0.0)
+    store.flush()
 
     app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), tmp_path)
     async with app.run_test(notifications=True) as pilot:
@@ -149,3 +151,25 @@ async def test_when_the_selected_issue_leaves_the_cursor_stays_in_place():
         await refreshed(pilot)
         # Its row now holds the next group's header; the cursor doesn't jump to the top.
         assert table(app).cursor_row == 6
+
+
+async def test_quitting_saves_the_snapshot_of_changes_still_waiting(tmp_path):
+    app = LazyIssuesApp(demo.config(), demo.github(), tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+
+    reopened = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
+    assert [issue.ref for issue in reopened.issues]
+
+
+async def test_quitting_flushes_a_save_still_waiting_on_its_delay(tmp_path, monkeypatch):
+    monkeypatch.setattr(store_module, "SAVE_DELAY", 3600)  # the timer can't be what saved it
+    path = snapshot_path(tmp_path, "my-work", demo.config().repo_names)
+    app = LazyIssuesApp(demo.config(), demo.github(), tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert not path.exists()  # waiting on the delay
+
+    assert [issue.ref for issue in IssueStore(path).issues]

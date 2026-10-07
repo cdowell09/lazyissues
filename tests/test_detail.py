@@ -3,11 +3,15 @@ import webbrowser
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+from textual.containers import VerticalScroll
+from textual.widget import Widget
 from textual.widgets import DataTable, Markdown, Static
 
+from lazyissues import detail as detail_module
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
-from lazyissues.detail import IssueDetailScreen
+from lazyissues.detail import _FIRST_SCREEN, IssueDetailScreen, _first_screen
 from lazyissues.fake import FakeGitHub
 from lazyissues.models import Event, Issue, IssueDetail, ProjectField
 
@@ -217,3 +221,126 @@ async def test_a_failed_fetch_is_reported_and_the_detail_stays_open():
         assert isinstance(app.screen, IssueDetailScreen)
         assert "Issue 4" in text(app)
         assert "Couldn't load r#4" in text(app)
+
+
+def long_thread() -> FakeGitHub:
+    fake = github()
+    for number in (1, 2):
+        events = tuple(Event("sam", AT, "commented", f"#{number} comment {n}") for n in range(60))
+        fake.details[f"o/r#{number}"] = IssueDetail(issue(number), body="Body", activity=events)
+    return fake
+
+
+async def test_a_long_thread_fills_in_completely_and_keeps_links():
+    app = app_on(long_thread())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        sources = markdown(app)
+        assert sources == ["Body", *(f"#1 comment {n}" for n in range(60))]
+        assert len(app.screen.query(Markdown)) == 61
+
+
+async def test_stepping_mid_fill_shows_only_the_new_issue():
+    app = app_on(long_thread())
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter", "right")  # no waiting for the fill
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert markdown(app) == ["Body", *(f"#2 comment {n}" for n in range(60))]
+
+
+async def test_stepping_from_a_long_issue_to_a_short_one_within_a_frame_adds_nothing_of_the_first():
+    long = long_thread()
+    app = app_on(Held(viewer=long.viewer, issues=long.issues))
+    app.details.update(long.details)  # both cached, so both draw at once
+    app.details["o/r#2"] = IssueDetail(
+        issue(2), body="Short", activity=(Event("kim", AT, "commented", "Only comment"),)
+    )
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter")
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+
+        screen.refresh_content()  # draws #1 and queues the fill of its comments...
+        screen.action_step(1)  # ...but #2 is shown before the fill gets to run
+        await pilot.pause(0.5)  # longer than the fill's pauses
+
+        assert markdown(app) == ["Short", "Only comment"]
+
+
+def test_exactly_a_first_screen_of_markdown_blocks_is_mounted_at_once_and_one_more_is_deferred():
+    assert _FIRST_SCREEN == 8
+    blocks: list[Widget] = [Markdown(f"block {n}") for n in range(9)]
+
+    assert _first_screen(blocks[:8]) == (blocks[:8], [])
+    assert _first_screen(blocks) == (blocks[:8], blocks[8:])
+
+
+class Held(FakeGitHub):
+    """Never answers the detail fetch, so only the cached detail is drawn."""
+
+    async def issue_detail(self, repo: str, number: int) -> IssueDetail:
+        await asyncio.Event().wait()
+        raise AssertionError
+
+
+@pytest.mark.parametrize(("widgets", "mounts"), [(8, 1), (9, 2), (16, 2), (17, 3)])
+async def test_the_fill_mounts_a_batch_of_eight_widgets_at_a_time(monkeypatch, widgets, mounts):
+    monkeypatch.setattr(detail_module, "_PAUSE", 0)
+    long = long_thread()
+    app = app_on(Held(viewer=long.viewer, issues=long.issues))
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.press("down", "enter")
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+        content = screen.query_one("#detail", VerticalScroll)
+        calls: list[int] = []
+        mount_all = content.mount_all
+
+        def counting(batch, *args, **kwargs):
+            calls.append(len(list(batch)))
+            return mount_all(batch, *args, **kwargs)
+
+        monkeypatch.setattr(content, "mount_all", counting)
+
+        rest = [Static(f"w{n}") for n in range(widgets)]
+        await screen.fill(screen._draws, content, rest)
+
+        assert calls == [8] * (mounts - 1) + [widgets - 8 * (mounts - 1)]
+
+
+def detail_children(app: LazyIssuesApp) -> list:
+    return list(app.screen.query_one("#detail").children)
+
+
+async def test_a_change_to_another_issue_leaves_the_detail_alone():
+    app = app_on(github())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        before = detail_children(app)
+
+        app.mover.changed.publish([issue(3, "todo")])
+        await pilot.pause()
+
+        assert detail_children(app) == before
+
+
+async def test_a_refetch_that_finds_nothing_new_leaves_the_detail_alone():
+    app = app_on(github())
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        before = detail_children(app)
+
+        screen = app.screen
+        assert isinstance(screen, IssueDetailScreen)
+        await screen.fetch(screen.issue)
+        await pilot.pause()
+
+        assert detail_children(app) == before

@@ -51,7 +51,7 @@ class Writer:
         # Publishes each write GitHub confirmed. A view holding the issue shows the new
         # copy; one that doesn't reloads if the write `regroups`, as the issue may belong
         # there now.
-        self.changed: Signal[Written] = Signal(app, "written")
+        self.changed: Signal[Sequence[Written]] = Signal(app, "written")
         self.last_repo: str | None = None  # where the last issue was created
         self._written_at: dict[str, float] = {}  # when each issue's latest write was sent
 
@@ -67,7 +67,7 @@ class Writer:
         self._open(AssignForm(self.github, issue, self.config.team))
 
     def edit(self, issue: Issue) -> None:
-        self._open(EditForm(self.github, issue, StatusRules(self.config)))
+        self._open(EditForm(self.github, issue, StatusRules(self.config), self.details))
 
     def create(self, near: Issue | None) -> None:
         """Create an issue, in the last repo used, else `near`'s, else the first."""
@@ -78,40 +78,48 @@ class Writer:
 
     async def assign_each(self, outcomes: Sequence[Outcome], login: str) -> list[Outcome]:
         """Add `login` to the assignees of each issue `outcomes` plans for, keeping the
-        others, one by one, and show GitHub's copy of each as a saved assign form does;
-        with GitHub's error on each it refuses."""
-        done = []
+        others, one by one, and show GitHub's copy of each, all at once at the end; with
+        GitHub's error on each it refuses."""
+        done, written = [], []
         for outcome in outcomes:
             if not isinstance(outcome.plan, Skip):
                 issue, sent_at = outcome.issue, now()
                 try:
-                    detail = await self.github.change_assignees(
-                        issue.repo, issue.number, [login], []
-                    )
+                    assigned = await self.github.assign(issue.repo, issue.number, login)
                 except GitHubError as e:
                     outcome = replace(outcome, error=str(e))
                 else:
-                    self._show(self._settled(Written(detail, sent_at, AssignForm.REGROUPS)))
+                    # The reply has the list's fields only: a cached detail keeps the rest,
+                    # and an uncached one stays uncached.
+                    cached = self.details.get(assigned.key)
+                    detail = replace(cached, issue=assigned) if cached else IssueDetail(assigned)
+                    each = Written(detail, sent_at, AssignForm.REGROUPS)
+                    written.append(self._record(each, cache=cached is not None))
             done.append(outcome)
+        self.changed.publish(written)  # one redraw for the whole bulk assign
         return done
 
     def _open(self, form: Form, done: Callable[[Written], None] | None = None) -> None:
         def closed(written: Written | None) -> None:
             if written is not None:
-                (done or self._show)(self._settled(written))
+                (done or self._show)(written)
 
         self.app.push_screen(form, closed)
 
-    def _settled(self, written: Written) -> Written:
-        """`written` with the moves confirmed after it was sent applied (ADR 0003)."""
+    def _record(self, written: Written, *, cache: bool = True) -> Written:
+        """Settle `written` and note it: when it was sent, and its detail in the cache
+        (`cache` False leaves an uncached detail uncached)."""
+        # Apply the moves confirmed after it was sent (ADR 0003).
         settled = self.moves.settle(written.detail.issue, written.sent_at)
-        return replace(written, detail=replace(written.detail, issue=settled))
+        written = replace(written, detail=replace(written.detail, issue=settled))
+        key = written.detail.issue.key
+        if cache:
+            self.details[key] = written.detail
+        self._written_at[key] = written.sent_at
+        return written
 
     def _show(self, written: Written) -> None:
-        key = written.detail.issue.key
-        self.details[key] = written.detail
-        self._written_at[key] = written.sent_at
-        self.changed.publish(written)
+        self.changed.publish([self._record(written)])
 
     def _created(self, written: Written) -> None:
         issue = written.detail.issue
