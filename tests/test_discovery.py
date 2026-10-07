@@ -148,3 +148,15 @@ async def test_a_repo_github_wont_read_is_left_out_with_the_reason():
 def test_a_config_needs_a_repo():
     with pytest.raises(ValueError, match="at least one repo"):
         Proposal(viewer="me").config()
+
+
+async def test_a_rerun_keeps_the_config_and_adds_statuses_its_sources_now_offer():
+    current = demo.config()
+    proposal = await discover(demo.github(), current)
+    assert proposal.config() == Config(
+        repos=current.repos,
+        # Lanternfish's board offers Blocked, which the config doesn't list yet.
+        statuses=[*current.statuses, Status("Blocked")],
+        team=current.team,
+        filters=current.filters,
+    )

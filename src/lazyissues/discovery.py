@@ -6,7 +6,7 @@ sources and statuses to suggest lives here, testable against `FakeGitHub`.
 
 import asyncio
 from collections.abc import Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from lazyissues.config import Config, Repo, SavedFilter, Status
 from lazyissues.github import Gateway, GitHubError
@@ -41,6 +41,27 @@ class Proposal:
     status_labels: dict[str, list[str]] = field(default_factory=dict)  # labels that are statuses
     order: list[str] = field(default_factory=list)  # status names as the user ordered them
     active: set[str] = field(default_factory=lambda: {normalize("In Progress")})
+    current: Config | None = None  # the config a rerun started from; it keeps the rest
+
+    def seed(self, config: Config) -> None:
+        """Start from `config`: its repos, status sources, statuses and roster.
+
+        Setup doesn't edit filters, preferences or other settings, so they carry over.
+        """
+        self.current = config
+        self.choose_repos(config.repo_names)
+        statuses = {normalize(status.name) for status in config.statuses}
+        for repo in config.repos:
+            offer = self.offers.get(repo.name)
+            if offer is None:
+                continue  # GitHub wouldn't read it; listed in `unreadable`
+            if repo.project is None or repo.project in [p.ref for p in offer.projects]:
+                self.sources[repo.name] = repo
+            self.status_labels[repo.name] = [
+                label for label in offer.labels if normalize(label) in statuses
+            ]
+        self.order = [status.name for status in config.statuses]
+        self.active = {normalize(status.name) for status in config.statuses if status.active}
 
     def add(self, repo: str, offer: RepoOffer) -> str:
         """Add `repo` to the repo set and return its name as listed.
@@ -79,9 +100,19 @@ class Proposal:
         for repo in self.repos:
             for name in self._offered_by(repo):
                 offered.setdefault(normalize(name), name)
+        # A rerun keeps the config's spelling of each status and its move key.
+        kept = {normalize(s.name): s for s in self.current.statuses} if self.current else {}
+        offered.update((name, kept[name].name) for name in offered.keys() & kept.keys())
         rank = {normalize(name): i for i, name in enumerate(self.order)}
         names = sorted(offered.values(), key=lambda name: rank.get(normalize(name), len(rank)))
-        return [Status(name, active=normalize(name) in self.active) for name in names]
+        return [
+            Status(
+                name,
+                active=normalize(name) in self.active,
+                key=kept[normalize(name)].key if normalize(name) in kept else None,
+            )
+            for name in names
+        ]
 
     def _offered_by(self, repo: str) -> list[str]:
         ref = self.sources[repo].project
@@ -104,8 +135,11 @@ class Proposal:
     def config(self) -> Config:
         if not self.repos:
             raise ValueError("A config needs at least one repo.")
+        repos = [self.sources[repo] for repo in self.repos]
+        if self.current is not None:
+            return replace(self.current, repos=repos, statuses=self.statuses)
         return Config(
-            repos=[self.sources[repo] for repo in self.repos],
+            repos=repos,
             statuses=self.statuses,
             team=[self.viewer],
             filters=list(STARTER_FILTERS),
@@ -119,13 +153,16 @@ async def find_repo(github: Gateway, repo: str, *, read_projects: bool) -> RepoO
     return RepoOffer(tuple(labels), tuple(projects))
 
 
-async def discover(github: Gateway) -> Proposal:
-    """Propose a config from the repos where the viewer has open issues."""
+async def discover(github: Gateway, current: Config | None = None) -> Proposal:
+    """Propose a config from the repos where the viewer has open issues,
+    or, on a rerun, from the `current` config with those repos offered too."""
     (viewer, scopes), issues = await asyncio.gather(
         github.whoami(), github.search_issues(OPEN_INVOLVING_ME)
     )
     read_projects = "project" in scopes
-    repos = sorted({issue.repo for issue in issues})
+    repos = current.repo_names if current else []
+    known = {repo.casefold() for repo in repos}
+    repos += sorted({issue.repo for issue in issues if issue.repo.casefold() not in known})
     offers = await asyncio.gather(
         *(find_repo(github, repo, read_projects=read_projects) for repo in repos),
         return_exceptions=True,
@@ -138,4 +175,6 @@ async def discover(github: Gateway) -> Proposal:
             raise offer
         else:
             proposal.add(repo, offer)
+    if current is not None:
+        proposal.seed(current)
     return proposal

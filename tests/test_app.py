@@ -97,6 +97,24 @@ def test_the_app_saves_to_the_config_it_was_started_with(launch, monkeypatch, tm
     assert launch == [("app", path)]
 
 
+def test_setup_flag_reruns_setup_from_the_current_config(launch, monkeypatch, tmp_path):
+    path = tmp_path / "config.toml"
+    __main__.config_module.save(demo.config(), path)
+    monkeypatch.setattr(sys, "argv", ["lazyissues", "--setup"])
+    monkeypatch.setattr(
+        __main__.SetupApp, "run", lambda self: launch.append(("setup", self.current)) or None
+    )
+    with pytest.raises(SystemExit, match=r"config\.toml is unchanged"):
+        __main__.main()
+    assert launch == [("setup", demo.config())]
+
+
+def test_setup_flag_without_a_config_runs_first_run_setup(launch, monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["lazyissues", "--setup"])
+    __main__.main()
+    assert launch == [("setup", tmp_path / "config.toml"), ("app", demo.config())]
+
+
 def test_quitting_setup_starts_nothing(launch, monkeypatch):
     monkeypatch.setattr(__main__.SetupApp, "run", lambda self: None)
     with pytest.raises(SystemExit, match="setup"):
