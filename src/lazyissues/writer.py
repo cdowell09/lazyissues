@@ -155,6 +155,7 @@ class IssueActions:
     """
 
     writer: Writer
+    app: App[Any]  # the host widget's
 
     def selected(self) -> Issue | None:
         raise NotImplementedError
@@ -180,5 +181,5 @@ class IssueActions:
 
     def action_copy_link(self) -> None:
         if issue := self.selected():
-            self.writer.app.copy_to_clipboard(issue.url)
-            self.writer.app.notify(f"Copied {issue.url}")
+            self.app.copy_to_clipboard(issue.url)
+            self.app.notify(f"Copied {issue.url}")

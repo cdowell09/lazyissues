@@ -110,7 +110,9 @@ async def test_an_indicator_shows_while_refreshing():
 
 async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_path):
     store = IssueStore(snapshot_path(tmp_path, "my-work", demo.config().repo_names))
-    store.replace(await demo.github().search_issues("assignee:@me"), requested_at=0.0)
+    store.replace(
+        await demo.github().search_issues("assignee:@me"), requested_at=0.0, loaded_at=None
+    )
     store.flush()
 
     app = LazyIssuesApp(demo.config(), Unreachable(viewer="me"), tmp_path)

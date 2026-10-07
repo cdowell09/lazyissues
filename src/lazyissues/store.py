@@ -68,11 +68,9 @@ class IssueStore:
         issues = await read
         self.replace(issues, requested_at, loaded_at=datetime.now(UTC))
 
-    def replace(
-        self, issues: list[Issue], requested_at: float, loaded_at: datetime | None = None
-    ) -> None:
+    def replace(self, issues: list[Issue], requested_at: float, loaded_at: datetime | None) -> None:
         """Apply a read requested at `requested_at` (on `now`'s clock) and answered at
-        `loaded_at` (None: the loaded data's time stands, as for moves applied to it).
+        `loaded_at`.
 
         A read requested before the one already applied is ignored. Within a read, an
         issue moved since the read was requested keeps its confirmed status, and one
@@ -83,12 +81,12 @@ class IssueStore:
         loaded = {issue.key: issue for issue in self.issues}
         self.issues = [self._settle(issue, requested_at, loaded) for issue in issues]
         self.requested_at = requested_at
-        self.loaded_at = loaded_at or self.loaded_at
+        self.loaded_at = loaded_at
         self._save()
 
     def apply_moves(self) -> None:
         """Show the moves confirmed since the loaded read was requested."""
-        self.replace(self.issues, self.requested_at)
+        self.replace(self.issues, self.requested_at, self.loaded_at)
 
     def update(self, issue: Issue, written_at: float) -> bool:
         """Replace the loaded copy of `issue` with the one GitHub confirmed for a write
