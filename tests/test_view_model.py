@@ -162,10 +162,10 @@ def team(state: ViewState = SHOW_DONE) -> list:
     ]
 
 
-def test_team_groups_by_member_ordered_by_active_issues_with_active_before_done():
+def test_team_groups_by_member_ordered_by_active_issues():
     assert team() == [
-        ("bo", [4, 5, 2, 3]),  # two active, then the rest in status order, done last
-        ("ana", [4, 1]),  # one active; a shared issue shows under each assignee
+        ("bo", [2, 3, 4, 5]),  # two active; with no update times, issues keep their order
+        ("ana", [1, 4]),  # one active; a shared issue shows under each assignee
         ("cy", []),  # everyone on the roster shows, even with nothing assigned
     ]
 
@@ -255,16 +255,16 @@ def test_update_times_order_by_the_moment_whether_github_or_the_demo_wrote_them(
 MILESTONES = [Milestone("a/x", "v1"), Milestone("a/y", "v1"), Milestone("a/x", "Empty")]
 
 
-def test_milestones_group_by_repo_and_title_with_issues_in_status_order():
+def test_milestones_group_by_repo_and_title():
     issues = [
         issue(1, "in-progress", milestone="v1"),
         issue(2, "todo", milestone="v1"),
         issue(3, "todo", repo="a/y", milestone="v1"),  # same title, another repo
         issue(4, "todo"),  # in no milestone
     ]
-    groups = visible_groups(issues, by_milestone(RULES, MILESTONES), RULES, DEFAULT)
+    groups = visible_groups(issues, by_milestone(MILESTONES), RULES, DEFAULT)
     assert [(g.name, [r.issue.number for r in g.rows]) for g in groups] == [
-        ("x / v1", [2, 1]),
+        ("x / v1", [1, 2]),
         ("y / v1", [3]),
         ("x / Empty", []),  # a milestone shows even with no issues loaded
     ]
@@ -292,7 +292,7 @@ class CountingRules(StatusRules):
 GROUPINGS = {
     "status": lambda rules: by_status(rules),
     "assignee": lambda rules: by_assignee(rules, ["ana", "bo"]),
-    "milestone": lambda rules: by_milestone(rules, MILESTONES),
+    "milestone": lambda rules: by_milestone(MILESTONES),
 }
 
 
