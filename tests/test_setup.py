@@ -1,8 +1,10 @@
+from dataclasses import replace
+
 from textual.widgets import Input, SelectionList, Static
 
 from lazyissues import config as config_module
 from lazyissues import demo
-from lazyissues.config import Config, Repo, Status
+from lazyissues.config import Config, Preferences, Repo, Status
 from lazyissues.discovery import STARTER_FILTERS
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
@@ -150,3 +152,44 @@ async def test_setup_can_retry_when_github_is_unreachable(tmp_path):
         await pilot.press("r")
         await settle(pilot)
         assert options(app) == [("octo-dev/lanternfish", True), ("octo-dev/tidepool", True)]
+
+
+async def test_rerunning_setup_starts_from_the_config_and_keeps_the_rest(tmp_path):
+    path = tmp_path / "config.toml"
+    current = replace(
+        demo.config(),
+        repos=[Repo("octo-dev/tidepool")],
+        statuses=[Status("Todo"), Status("In Progress", active=True, key="p")],
+        done_window_days=7,
+        pinned_milestones=["octo-dev/tidepool/v1.0"],
+        preferences=Preferences(show_done=True, start_tab="Team", theme="nord"),
+    )
+    config_module.save(current, path)
+    # Hand edits: a comment, and a setting only the file sets.
+    text = path.read_text(encoding="utf-8")
+    path.write_text(f"# my notes\ndone_window_days = 7\n{text}", encoding="utf-8")
+
+    app = SetupApp(demo.github(), path, current)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        # The config's repos are checked; other repos with my issues are offered.
+        assert options(app) == [("octo-dev/tidepool", True), ("octo-dev/lanternfish", False)]
+        await click(pilot, "#next")
+        # Tidepool's labels that are config statuses start checked.
+        assert options(app) == [
+            ("bug", False),
+            ("documentation", False),
+            ("enhancement", False),
+            ("in-progress", True),
+            ("in-review", False),
+            ("todo", True),
+        ]
+        await click(pilot, "#next")
+        # The config's order, names, active statuses and keys.
+        assert options(app) == [("Todo", False), ("In Progress", True)]
+        assert "(p)" in str(app.screen.query_one(SelectionList).get_option_at_index(1).prompt)
+        await click(pilot, "#save")
+
+    assert app.return_value == current
+    assert config_module.load(path) == current
+    assert path.read_text(encoding="utf-8").startswith("# my notes\ndone_window_days = 7\n")

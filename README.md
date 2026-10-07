@@ -182,7 +182,9 @@ The first time you run `lazyissues` there is no config yet, so it starts setup. 
 
 If your `gh` token lacks the `project` scope, setup says so and offers labels only. Run `gh auth refresh -s project`, then start lazyissues again to use project boards.
 
-Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`). To run setup again, delete or rename `config.toml`.
+Setup also puts you on the team roster and adds two saved filters, "Ready for me" (`label:ready-for-human`) and "Needs triage" (`label:needs-triage`).
+
+To change your repos, status sources or statuses later, run `lazyissues --setup`. It starts from your current config: its repos are checked (other repos where you have open issues are offered unchecked), each keeps its status source, the labels that are statuses are checked, and the statuses keep their order, active marks and move keys. A status a source now offers that the config doesn't list joins the end. Saving keeps your team roster, saved filters, preferences, other settings and the comments in `config.toml`; quitting with `ctrl+q` leaves it unchanged. Without a config, `--setup` is the same as a first run.
 
 ## Configuration
 
