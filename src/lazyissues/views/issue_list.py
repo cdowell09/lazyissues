@@ -40,6 +40,7 @@ from lazyissues.view_model import (
     Grouping,
     Row,
     ViewState,
+    age,
     by_status,
     focusable_statuses,
     visible_groups,
@@ -52,6 +53,7 @@ from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
 SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
+AGE_TICK = 60  # seconds between redraws of the data's age; past a minute it counts minutes
 CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
 DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
 # How a row stands out, by its table component class (`IssueTable.highlights`).
@@ -200,6 +202,7 @@ class IssueList(IssueActions, Widget):
         self.query_one(DataTable).add_columns(*COLUMNS)
         self.mover.changed.subscribe(self, self._on_moved)
         self.writer.changed.subscribe(self, self._on_written)
+        self.set_interval(AGE_TICK, self._show_filters)
         if self.store.issues:
             self.redraw()
 
@@ -382,10 +385,20 @@ class IssueList(IssueActions, Widget):
             f"repo: {state.repo}" if state.repo else "",
             f"done: last {self.config.done_window_days} days" if state.show_done else "",
             f"selected: {len(chosen)}" if (chosen := self._chosen()) else "",
+            self._age(),
         ]
         line = self.query_one("#filters", Static)
         line.update("  ·  ".join(p for p in parts if p))
         line.display = any(parts)
+
+    def _age(self) -> str:
+        """How old the loaded data is, or after a failed refresh when it's from."""
+        loaded_at = self.store.loaded_at
+        if loaded_at is None:
+            return ""
+        if self.error:
+            return f"refresh failed · cached {loaded_at.astimezone():%H:%M}"
+        return f"updated {age(datetime.now(UTC) - loaded_at)} ago"
 
     def on_click(self, event: events.Click) -> None:
         """A click on a row selects it, and on the selected row opens it. A click on a group

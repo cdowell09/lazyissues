@@ -6,6 +6,7 @@ the list widget only draws what `visible_groups` returns.
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from datetime import timedelta
 
 from lazyissues.models import Issue, Milestone
 from lazyissues.statuses import IssueStatus, StatusRules
@@ -201,6 +202,16 @@ def focusable_statuses(issues: list[Issue], rules: StatusRules, state: ViewState
     """The statuses status focus steps through: those of the issues the other filters
     leave, in display order."""
     return [group.name for group in rules.group(_filtered(issues, rules, state))]
+
+
+def age(elapsed: timedelta) -> str:
+    """How long ago, in its largest whole unit: "59s", "1m", "23h", "3d". A negative time
+    (a clock set back) is "0s"."""
+    seconds = max(0, int(elapsed.total_seconds()))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
 
 
 def _filtered(issues: list[Issue], rules: StatusRules, state: ViewState) -> list[Issue]:

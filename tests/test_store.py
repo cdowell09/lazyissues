@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -208,3 +210,33 @@ def test_flush_saves_a_pending_snapshot_at_once(tmp_path):
         assert IssueStore(path).issues == [issue(1)]
 
     asyncio.run(change_and_exit())
+
+
+async def test_a_refresh_records_when_its_data_was_loaded_and_the_snapshot_keeps_it(tmp_path):
+    path = tmp_path / "snapshot.json"
+    store = IssueStore(path)
+    assert store.loaded_at is None
+
+    async def read() -> list[Issue]:
+        return [issue(1)]
+
+    before = datetime.now(UTC)
+    await store.refresh(read())
+    loaded_at = store.loaded_at
+    assert loaded_at is not None and before <= loaded_at <= datetime.now(UTC)
+
+    store.update(issue(1, "Written"), written_at=store.requested_at + 1)
+    store.apply_moves()
+    assert store.loaded_at == loaded_at  # a write or move doesn't make the rest fresher
+    store.flush()
+
+    assert IssueStore(path).loaded_at == loaded_at
+
+
+def test_a_snapshot_from_the_previous_version_is_ignored(tmp_path):
+    path = tmp_path / "snapshot.json"
+    fields = {"repo": "octo/repo", "number": 1, "title": "t", "url": "u"}
+    path.write_text(json.dumps({"version": V - 1, "issues": [fields]}), encoding="utf-8")
+
+    store = IssueStore(path)
+    assert (store.issues, store.loaded_at) == ([], None)
