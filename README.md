@@ -157,6 +157,8 @@ If you changed anything, `Esc` asks before discarding it: `y` discards, `n` or `
 
 The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup only the tab you start on refreshes; each other tab refreshes the first time you open it. Deleting it is always safe.
 
+The line under each list says how old its issues are (`updated 4m ago`), from startup on. If a refresh fails, the list keeps its cached issues and the line says so and when they were loaded (`refresh failed · cached 09:12`) until a refresh succeeds.
+
 ## Rate limits
 
 If GitHub's rate limit is reached, lazyissues says so and when to try again. A read that is told to wait 10 seconds or less (a refresh, a detail) waits and tries once more; a longer wait shows the message at once. A write is never retried, since GitHub may have applied it.
