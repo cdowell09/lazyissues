@@ -46,7 +46,7 @@ from lazyissues.view_model import (
     focusable_statuses,
     visible_groups,
 )
-from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
+from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
 
 # The first column is each row's checkbox, a column rather than Textual's row label: a
 # redraw drops the label column until the table is next idle, and a click in between
@@ -129,6 +129,7 @@ class IssueList(IssueActions, Widget):
     """
     BINDINGS = [
         *WRITE_BINDINGS,
+        *LINK_BINDINGS,
         Binding("slash", "search", "Search"),
         Binding("escape", "clear_search", "Clear search", show=False),
         Binding("f", "focus_status(1)", "Focus status"),

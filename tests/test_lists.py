@@ -1,5 +1,7 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
+import webbrowser
+
 from listed import drawn, plain, show_tab
 from textual.pilot import Pilot
 from textual.widgets import DataTable, TabbedContent
@@ -182,3 +184,17 @@ async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
         await pilot.pause(0.3)
         assert len(draws) == 1
         assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
+
+
+async def test_o_opens_and_y_copies_the_link_of_the_issue_under_the_cursor(monkeypatch):
+    opened: list[str] = []
+    copied: list[str] = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await pilot.press("o", "y")  # on the first group's header: nothing to open or copy
+        assert (opened, copied) == ([], [])
+        await pilot.press("down", "o", "y")  # lanternfish#9
+        url = "https://github.com/octo-dev/lanternfish/issues/9"
+        assert (opened, copied) == ([url], [url])

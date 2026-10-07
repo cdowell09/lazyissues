@@ -81,12 +81,13 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `a` | lists, detail | assign: pick from the team roster and the repo's assignable users |
 | `c` | lists, detail | create an issue |
 | `e` | lists, detail | edit the issue's title, body, labels and milestone |
+| `o` | lists, detail | open the issue in your browser |
+| `y` | lists, detail | copy the issue's URL, through your terminal and the system clipboard (see [Mouse](#mouse)) |
 | `Space` | lists | select the issue for a bulk action, or on a group header the whole group; again to unselect |
 | `A` `u` | lists | select every issue shown; clear the selection |
 | `B` | lists | bulk move or assign the selected issues |
 | `←` `→` | detail | previous or next issue in the list underneath |
-| `z` | detail | toggle full screen |
-| `o` | detail | open the issue in your browser |
+| `w` | detail | toggle full screen |
 | `h` | detail | toggle the activity timeline |
 | `Esc` | detail | close |
 | `r` | lists | refresh the tab from GitHub |
