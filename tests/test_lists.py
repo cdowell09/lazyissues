@@ -213,14 +213,18 @@ LONG = "A title long enough to push every column after it off an eighty-column t
 def long_titled_app() -> LazyIssuesApp:
     url = "https://github.com/o/r/issues/1"
     updated = (datetime.now(UTC) - timedelta(days=3, hours=1)).isoformat()
-    issue = Issue("o/r", 1, LONG, url, ("me",), ("todo", "bug"), updated_at=updated)
+    milestone = "Spring cleanup of the importer"
+    issue = Issue(
+        "o/r", 1, LONG, url, ("me",), ("todo", "bug"), updated_at=updated, milestone=milestone
+    )
     config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")])
-    return LazyIssuesApp(config, FakeGitHub(viewer="me", issues=[issue]))
+    github = FakeGitHub(viewer="me", issues=[issue], milestones={"o/r": [milestone]})
+    return LazyIssuesApp(config, github)
 
 
-def shown(app: LazyIssuesApp) -> tuple[str, str]:
-    """My Work's column headings and its issue's row, as the terminal shows them."""
-    listed = table(app, "my-work")
+def shown(app: LazyIssuesApp, view: str = "my-work") -> tuple[str, str]:
+    """A list's column headings and its issue's row, as the terminal shows them."""
+    listed = table(app, view)
     lines = [listed.render_line(y).text for y in range(listed.size.height)]
     return lines[0], next(line for line in lines if "r#1" in line)
 
@@ -234,6 +238,18 @@ async def test_at_80_columns_every_column_shows_and_a_long_title_ends_in_an_elli
         assert row.split()[-3:] == ["todo,", "bug", "3d"]  # the last columns, whole
         title = row.split("r#1")[1].split("…")[0].strip()
         assert LONG.startswith(title) and len(title) > 10  # cut short, with room to read
+
+
+async def test_a_long_group_header_leaves_the_columns_as_the_issues_need_them():
+    app = long_titled_app()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        my_work = shown(app)  # its header, "▾ Todo (1)", is short
+        await show_tab(pilot, "milestones")
+        header = drawn(table(app, "milestones"))[0]
+        assert header.startswith("▾ r / Spring cleanup of the importer (1)  ░")
+        # A long header (milestone, count, progress bar) doesn't squeeze the title.
+        assert shown(app, "milestones") == my_work
 
 
 async def test_resizing_refits_the_columns():

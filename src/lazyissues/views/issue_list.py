@@ -111,15 +111,18 @@ class IssueTable(DataTable):
 
     def show_rows(self, rows: Sequence[tuple[str | None, Sequence[str | Text]]]) -> None:
         """Replace the rows with `rows`, each a row key and its cells, with the columns
-        `fit` to the table's width; text cut short ends in `…`.
+        `fit` to the table's width; text cut short ends in `…`. Only issues' cells (rows
+        with a key) size the columns, so a long group header is cut rather than widening
+        its column.
 
         GitHub text is never markup, so string cells are shown as typed."""
         self.clear(columns=True)
         cells = [[Text(cell) if isinstance(cell, str) else cell for cell in row] for _, row in rows]
         for cell in (cell for row in cells for cell in row):
             cell.overflow = "ellipsis"
+        issues = [row for (key, _), row in zip(rows, cells, strict=True) if key is not None]
         natural = [
-            max([len(label), *(row[at].cell_len for row in cells)])
+            max([len(label), *(row[at].cell_len for row in issues)])
             for at, label in enumerate(COLUMNS)
         ]
         padding = 2 * self.cell_padding * len(COLUMNS)
