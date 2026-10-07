@@ -13,7 +13,7 @@ from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.fake import FakeGitHub
-from lazyissues.forms.form import Form, Picker
+from lazyissues.forms.form import ConfirmDiscard, Form, Picker
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail, Project
 from lazyissues.mover import RejectedMoveBanner
@@ -212,6 +212,98 @@ async def test_an_empty_comment_is_not_sent_and_escape_cancels():
         await pilot.press("escape")
         assert not isinstance(app.screen, Form)
         assert (await gateway.issue_detail("o/r", 1)).comments == ()
+
+
+async def test_escape_on_a_changed_form_asks_and_keep_editing_keeps_the_draft():
+    gateway = github()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        await pilot.press("C")
+        await settle(pilot)
+        await type_text(pilot, "Half a thought")
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDiscard)
+
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, Form)
+        assert app.screen.query_one(TextArea).text == "Half a thought"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert (await gateway.issue_detail("o/r", 1)).comments == ()
+
+
+async def test_escape_closes_an_untouched_edit_form_and_asks_once_a_pick_changes():
+    gateway = github()
+    gateway.labels["o/r"] += ["docs"]
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        await pilot.press("e")
+        await settle(pilot)
+
+        await pilot.press("escape")  # its loaded title, body and milestone are no change
+        await pilot.pause()
+        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+
+        await pilot.press("e")
+        await settle(pilot)
+        app.screen.query_one("#labels Input", Input).focus()
+        await type_text(pilot, "doc")  # filtering the picker changes no field
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+
+        await pilot.press("e")
+        await settle(pilot)
+        app.screen.query_one("#labels SelectionList").focus()
+        await pilot.press("space")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDiscard)
+
+
+class SlowComment(FakeGitHub):
+    """Holds each comment until `sent` is set."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.sent = asyncio.Event()
+
+    async def comment(self, repo: str, number: int, body: str) -> IssueDetail:
+        await self.sent.wait()
+        return await super().comment(repo, number, body)
+
+
+async def test_escape_during_a_save_waits_for_it_and_closes_with_its_result():
+    fake = github()
+    gateway = SlowComment(viewer="me", issues=fake.issues, details=fake.details, labels=fake.labels)
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        await pilot.press("C")
+        await settle(pilot)
+        await type_text(pilot, "On its way")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, Form)  # neither closed nor asking
+
+        gateway.sent.set()
+        await settle(pilot)
+        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        [comment] = (await gateway.issue_detail("o/r", 1)).comments
+        assert comment.text == "On its way"
+        assert app.details["o/r#1"].comments == (comment,)
 
 
 def list_row(app: LazyIssuesApp, key: str) -> list[str]:
