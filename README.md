@@ -101,6 +101,8 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `Ctrl+C` | anywhere | copy the selected text |
 | `q` | anywhere | quit |
 
+The footer shows the keys you reach for most, so it fits an 80-column terminal; `?` lists every key.
+
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
 Each tab remembers its selection, search, status focus, done toggle, folds and repo filter while the app runs.

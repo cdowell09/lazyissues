@@ -131,18 +131,19 @@ class Writer:
             self.mover.move(issue, MoveTo(written.status))
 
 
-# The writing keys, and the keys for the issue's link. A host lists them in its own
+# The writing keys, and the keys for the issue's link; the footer leaves the less frequent
+# ones to `?`, which lists every key. A host lists them in its own
 # BINDINGS: Textual only gathers BINDINGS from widget classes, and `IssueActions` is a
 # plain mixin.
 WRITE_BINDINGS = [
-    Binding("C", "comment", "Comment"),
-    Binding("a", "assign", "Assign"),
-    Binding("c", "create", "New issue"),
-    Binding("e", "edit", "Edit"),
+    Binding("C", "comment", "Comment", show=False),
+    Binding("a", "assign", "Assign", show=False),
+    Binding("c", "create", "New issue", show=False),
+    Binding("e", "edit", "Edit", show=False),
 ]
 LINK_BINDINGS = [
-    Binding("o", "open_in_browser", "Open in browser"),
-    Binding("y", "copy_link", "Copy link"),
+    Binding("o", "open_in_browser", "Open link"),
+    Binding("y", "copy_link", "Copy link", show=False),
 ]
 
 

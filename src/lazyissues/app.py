@@ -58,7 +58,7 @@ class LazyIssuesApp(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("S", "preferences", "Preferences"),
+        Binding("S", "preferences", "Preferences", show=False),
         Binding("question_mark", "keys", "Keys"),
         clipboard.COPY,
     ]

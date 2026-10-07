@@ -132,17 +132,17 @@ class IssueList(IssueActions, Widget):
         *LINK_BINDINGS,
         Binding("slash", "search", "Search"),
         Binding("escape", "clear_search", "Clear search", show=False),
-        Binding("f", "focus_status(1)", "Focus status"),
+        Binding("f", "focus_status(1)", "Focus status", show=False),
         Binding("F", "focus_status(-1)", "Focus previous status", show=False),
-        Binding("d", "toggle_done", "Done"),
-        Binding("z", "fold", "Fold"),
+        Binding("d", "toggle_done", "Done", show=False),
+        Binding("z", "fold", "Fold", show=False),
         Binding("Z", "fold_all", "Fold all", show=False),
-        Binding("R", "repo_filter", "Repo"),
+        Binding("R", "repo_filter", "Repo", show=False),
         Binding("m", "move", "Move"),
-        Binding("space", "toggle_selected", "Select"),
+        Binding("space", "toggle_selected", "Select", show=False),
         Binding("A", "select_all", "Select all shown", show=False),
         Binding("u", "clear_selection", "Clear selection", show=False),
-        Binding("B", "bulk", "Bulk move or assign"),
+        Binding("B", "bulk", "Bulk move or assign", show=False),
     ]
 
     LABEL: ClassVar[str]  # the tab's title
