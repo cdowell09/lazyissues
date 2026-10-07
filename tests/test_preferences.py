@@ -22,7 +22,7 @@ from lazyissues import config as config_module
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Preferences, SavedFilter, Status
-from lazyissues.keys import KeysScreen
+from lazyissues.keys import KeysScreen, tab_bindings
 from lazyissues.move_picker import MovePicker
 from lazyissues.preferences import PreferencesScreen
 from lazyissues.status_list import StatusList
@@ -316,3 +316,14 @@ async def test_saving_preferences_keeps_filters_saved_earlier(tmp_path):
     saved = config_module.load(path)
     assert saved.filters == [SavedFilter("Bugs", "label:bug")]
     assert saved.preferences.theme == "nord"
+
+
+def test_number_keys_reach_the_first_nine_tabs():
+    nine = tab_bindings([f"Tab {i}" for i in range(1, 10)])
+    assert [b.key for b in nine][:9] == [str(i) for i in range(1, 10)]
+    ten = tab_bindings([f"Tab {i}" for i in range(1, 11)])
+    assert [b.key for b in ten] == [
+        *(str(i) for i in range(1, 10)),
+        "left_square_bracket",
+        "right_square_bracket",
+    ]
