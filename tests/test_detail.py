@@ -181,6 +181,17 @@ async def test_z_toggles_full_screen():
         assert width() < 100
 
 
+@pytest.mark.parametrize(
+    ("columns", "full"), [(detail_module.NARROW - 1, True), (detail_module.NARROW, False)]
+)
+async def test_a_narrow_terminal_opens_the_detail_full_screen(columns: int, full: bool):
+    app = app_on(github())
+    async with app.run_test(size=(columns, 30)) as pilot:
+        await open_detail(pilot)
+        width = app.screen.query_one("#detail").outer_size.width
+        assert (width == columns) is full
+
+
 async def test_o_opens_the_issue_in_the_browser(monkeypatch):
     opened = []
     monkeypatch.setattr(webbrowser, "open", opened.append)

@@ -94,6 +94,7 @@ def _activity_widgets(issue: Issue, detail: IssueDetail | None) -> list[Widget]:
     return widgets
 
 
+NARROW = 100  # a terminal fewer columns wide opens the detail full screen
 _FIRST_SCREEN = 8  # Markdown blocks drawn at once; about a screenful
 _BATCH = 8  # widgets (headings and meta lines too) mounted per step of the fill
 _PAUSE = 0.1
@@ -186,6 +187,7 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         self.writer.changed.subscribe(
             self, lambda writes: self.on_changed([w.detail.issue for w in writes])
         )
+        self.set_class(self.app.size.width < NARROW, "full")
         self.show_issue()
 
     def on_changed(self, changed: Sequence[Issue]) -> None:
