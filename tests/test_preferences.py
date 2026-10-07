@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 
+import pytest
 from listed import plain, show_tab
 from textual import events
 from textual.pilot import Pilot
@@ -262,6 +263,31 @@ async def test_a_status_key_the_lists_already_bind_is_warned_about(tmp_path):
         await pilot.pause()
         toasts = [str(toast.render()) for toast in app.screen.query("Toast")]
         assert any("c is already a key" in toast for toast in toasts)
+
+
+@pytest.mark.parametrize("key", ["2", "]"])
+async def test_a_status_key_that_switches_tabs_is_warned_about(tmp_path, key):
+    app = LazyIssuesApp(demo.config(), demo.github(), config_path=tmp_path / "config.toml")
+    async with app.run_test(size=(100, 60), notifications=True) as pilot:
+        await settled(pilot)
+        screen = await open_preferences(pilot)
+        screen.query_one(StatusList).focus()
+        screen.query_one("#key", Input).focus()
+        await pilot.press(key)
+        await pilot.pause()
+        toasts = [str(toast.render()) for toast in app.screen.query("Toast")]
+        assert any(f"{key} is already a key" in toast for toast in toasts)
+
+
+async def test_a_status_shortcut_on_a_tab_key_switches_tabs_instead():
+    statuses = [replace(s, key="2") if s.key == "p" else s for s in demo.config().statuses]
+    app = LazyIssuesApp(replace(demo.config(), statuses=statuses), demo.github())
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await pilot.press("down", "2")
+        await pilot.pause()
+        assert active_tab(app) == "Team"
+        assert not isinstance(app.screen, MovePicker)
 
 
 async def test_saving_preferences_keeps_filters_saved_earlier(tmp_path):

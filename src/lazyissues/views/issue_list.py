@@ -19,6 +19,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.coordinate import Coordinate
+from textual.keys import key_to_character
 from textual.reactive import var
 from textual.selection import Selection
 from textual.strip import Strip
@@ -31,6 +32,7 @@ from lazyissues.config import Config
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.forms.form import Written
 from lazyissues.github import Gateway, GitHubError
+from lazyissues.keys import tab_bindings
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.statuses import DONE, StatusRules
@@ -556,7 +558,8 @@ class IssueList(IssueActions, Widget):
         )
 
 
-def bound_keys() -> set[str]:
-    """Every key a list or the detail binds, which a status shortcut can't take over."""
-    bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS]
-    return set(BindingsMap(bindings).key_to_bindings)
+def bound_keys(tabs: Sequence[str]) -> set[str]:
+    """Every key a list or the detail binds, and the app's keys for its `tabs`, which a
+    status shortcut can't take over; as the character typed, where a key has one."""
+    bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS, *tab_bindings(tabs)]
+    return {key_to_character(key) or key for key in BindingsMap(bindings).key_to_bindings}

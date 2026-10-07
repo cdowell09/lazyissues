@@ -93,6 +93,8 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `Enter` | Filters sidebar | run the highlighted filter |
 | `Tab` `Shift+Tab` | Filters | move between the sidebar and the results |
 | `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
+| `1`–`5` | anywhere | go to a tab and its list, Filters included |
+| `[` `]` | anywhere | go to the previous or next tab |
 | `S` | anywhere | preferences |
 | `?` | anywhere | list every key |
 | `Ctrl+C` | anywhere | copy the selected text |
@@ -110,7 +112,7 @@ Drag across text in a list, the detail or a form field to select it. Press `Ctrl
 
 ## Moves
 
-`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists don't already use.
+`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists, the detail and the tab keys don't already use.
 
 - In a label-backed repo, a move adds the status's label (creating it in the repo if it has none) and removes every other status label.
 - In a project-backed repo, a move adds the issue to the project if it isn't on it, then sets its Status.

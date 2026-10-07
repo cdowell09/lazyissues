@@ -2,7 +2,7 @@ import sys
 
 import pytest
 from listed import plain
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input, TabbedContent
 
 from lazyissues import __main__, demo
 from lazyissues.app import LazyIssuesApp
@@ -111,3 +111,48 @@ async def test_my_work_fills_the_space_under_the_tabs():
         await pilot.pause()
         # Header, tab bar and footer take 4 rows; My Work gets the rest.
         assert app.query_one("#my-work").region.height == 20
+
+
+def active_tab(app: LazyIssuesApp) -> str:
+    tabs = app.query_one(TabbedContent)
+    return tabs.get_tab(tabs.active).label_text
+
+
+async def test_number_keys_jump_to_a_tab_and_focus_its_list_from_every_tab():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        for key, tab, focused in [
+            ("2", "Team", "#team DataTable"),
+            ("5", "Filters", "#filters FilterResults DataTable"),  # where tab swaps panes
+            ("3", "Milestones", "#milestones DataTable"),
+            ("5", "Filters", "#filters FilterResults DataTable"),
+            ("1", "My Work", "#my-work DataTable"),
+        ]:
+            await pilot.press(key)
+            await pilot.pause()
+            assert (active_tab(app), app.focused) == (tab, app.query_one(focused))
+
+
+async def test_brackets_step_to_the_previous_and_next_tab_wrapping_around():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        seen = []
+        for key in ["left_square_bracket", "left_square_bracket", "right_square_bracket"]:
+            await pilot.press(key)
+            await pilot.pause()
+            seen.append(active_tab(app))
+        assert seen == ["Filters", "Unassigned", "Filters"]
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        assert (active_tab(app), app.focused) == ("My Work", app.query_one("#my-work DataTable"))
+
+
+async def test_a_number_key_types_into_the_search_box_instead_of_switching_tabs():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.press("slash", "2")
+        assert active_tab(app) == "My Work"
+        assert app.query_one("#my-work #search", Input).value == "2"
