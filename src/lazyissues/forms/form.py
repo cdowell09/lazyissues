@@ -35,11 +35,29 @@ class FormError(Exception):
     """Input the form can't send; shown like GitHub's errors."""
 
 
-class TextField(TextArea):
+class Field:
+    """A form field, which says whether the user `changed` it since the form filled it
+    in; one the form never filled starts empty. A form asks before discarding a change."""
+
+    @property
+    def changed(self) -> bool:
+        raise NotImplementedError
+
+
+class TextField(Field, TextArea):
     """Multiline text: Enter submits the form, Shift+Enter or Ctrl+J starts a new line."""
+
+    filled = ""  # the text the form last filled in
 
     class Submitted(Message):
         pass
+
+    @property
+    def changed(self) -> bool:
+        return self.text != self.filled
+
+    def fill(self, text: str) -> None:
+        self.text = self.filled = text
 
     async def _on_key(self, event: events.Key) -> None:
         # Runs before TextArea's handler, which a prevented default skips.
@@ -53,7 +71,7 @@ class TextField(TextArea):
         event.prevent_default()
 
 
-class Picker(Widget):
+class Picker(Field, Widget):
     """Pick any number of `items`; typing in the filter narrows the list."""
 
     DEFAULT_CSS = """
@@ -66,10 +84,15 @@ class Picker(Widget):
         self.items: list[str] = []
         self.chosen: set[str] = set()  # kept while the filter hides some of them
         self.shown: list[str] = []
+        self.filled: list[str] = []  # the picks the form last filled in
 
     @property
     def selected(self) -> list[str]:
         return [item for item in self.items if item in self.chosen]
+
+    @property
+    def changed(self) -> bool:
+        return self.selected != self.filled
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Filter", compact=True)
@@ -78,6 +101,7 @@ class Picker(Widget):
     def set_items(self, items: Iterable[str], selected: Iterable[str]) -> None:
         self.items = list(dict.fromkeys(items))
         self.chosen = set(selected)
+        self.filled = self.selected
         self._show()
 
     def _show(self) -> None:
@@ -112,8 +136,8 @@ class Form(ModalScreen[Written | None]):
 
     A subclass composes its `fields`, can `load` what they offer from GitHub, and
     `save`s. A failed load or save shows the error and keeps the form open, so nothing
-    typed is lost. Closing without a change returns None, and asks first when the
-    fields changed since they first loaded.
+    typed is lost. Closing without a change returns None, and asks first when a `Field`
+    changed.
     """
 
     REGROUPS: ClassVar[bool] = True  # whether its writes can change a tab's issues
@@ -154,7 +178,6 @@ class Form(ModalScreen[Written | None]):
         self.heading = heading
         self.ready = False  # loaded, so the fields hold what GitHub offers
         self.saving = False
-        self.loaded: list[object] | None = None  # the fields' values once first loaded
         self.text_field: TextField | None = None  # the one `Ctrl+E` edits
 
     def fields(self) -> ComposeResult:
@@ -205,18 +228,11 @@ class Form(ModalScreen[Written | None]):
             self.show_message(f"Couldn't load: {e}", error=True)
             return
         self.ready = True
-        if self.loaded is None:  # not on a reload, which a changed field can start
-            self.loaded = self.values()
         self.show_message("")
 
-    def values(self) -> list[object]:
-        """What the fields hold; a picker's filter text is not part of the draft."""
-        return [
-            *(i.value for i in self.query(Input) if not isinstance(i.parent, Picker)),
-            *(t.text for t in self.query(TextArea)),
-            *(p.selected for p in self.query(Picker)),
-            *(s.value for s in self.query(Select)),
-        ]
+    @property
+    def changed(self) -> bool:
+        return any(isinstance(field, Field) and field.changed for field in self.query("*"))
 
     def show_message(self, text: str, *, error: bool = False) -> None:
         message = self.query_one("#message", Static)
@@ -244,7 +260,7 @@ class Form(ModalScreen[Written | None]):
         # A save on its way may already have reached GitHub; close with its result.
         if self.saving:
             return
-        if self.loaded is None or self.values() == self.loaded:
+        if not self.changed:
             self.dismiss(None)
             return
 
@@ -336,10 +352,20 @@ class Draft:
     milestone: str | None
 
 
-class IssueFields(Widget):
-    """The title, body, labels and milestone fields that create and edit share."""
+class IssueFields(Field, Widget):
+    """The title, body, labels and milestone fields that create and edit share. The body
+    and labels are fields of their own; this one is the title and milestone."""
 
     DEFAULT_CSS = "IssueFields { height: auto; }"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.filled: tuple[str, str | None] = ("", None)  # title and milestone filled in
+
+    @property
+    def changed(self) -> bool:
+        title = self.query_one("#title", Input).value
+        return (title, self.query_one("#milestone", Select).selection) != self.filled
 
     def compose(self) -> ComposeResult:
         yield label("Title")
@@ -353,7 +379,8 @@ class IssueFields(Widget):
 
     def fill(self, title: str, body: str) -> None:
         self.query_one("#title", Input).value = title
-        self.query_one(TextField).text = body
+        self.query_one(TextField).fill(body)
+        self.filled = (title, self.filled[1])
 
     def offer(
         self,
@@ -368,6 +395,7 @@ class IssueFields(Widget):
         select = self.query_one("#milestone", Select)
         select.set_options(choices([*milestones, *([milestone] if milestone else [])]))
         select.value = milestone or Select.NULL
+        self.filled = (self.filled[0], milestone)
 
     def draft(self) -> Draft:
         title = self.query_one("#title", Input).value.strip()

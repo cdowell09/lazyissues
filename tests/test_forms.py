@@ -270,6 +270,72 @@ async def test_escape_closes_an_untouched_edit_form_and_asks_once_a_pick_changes
         assert isinstance(app.screen, ConfirmDiscard)
 
 
+class SlowLabels(FakeGitHub):
+    """Holds each read of a repo's labels until `loaded` is set; fails it if `fail` is."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.loaded = asyncio.Event()
+        self.fail = False
+
+    async def repo_labels(self, repo: str) -> list[str]:
+        await self.loaded.wait()
+        if self.fail:
+            raise GitHubError("offline")
+        return await super().repo_labels(repo)
+
+
+def slow_labels() -> SlowLabels:
+    fake = github()
+    return SlowLabels(
+        viewer="me",
+        issues=fake.issues,
+        details=fake.details,
+        labels=fake.labels,
+        milestones=fake.milestones,
+    )
+
+
+async def test_text_typed_while_a_form_loads_is_a_change_escape_asks_about():
+    gateway = slow_labels()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        await pilot.press("c")
+        await pilot.pause()
+        app.screen.query_one("#title", Input).focus()
+        await type_text(pilot, "Typed early")
+        gateway.loaded.set()
+        await settle(pilot)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDiscard)
+
+
+async def test_after_a_failed_load_escape_closes_an_empty_form_and_asks_about_text():
+    gateway = slow_labels()
+    gateway.fail = True
+    gateway.loaded.set()
+    app = app_on(gateway)
+    async with app.run_test() as pilot:
+        await select_first_issue(pilot)
+        await pilot.press("c")
+        await settle(pilot)
+        assert "Couldn't load" in str(app.screen.query_one("#message", Static).render())
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+
+        await pilot.press("c")
+        await settle(pilot)
+        app.screen.query_one("#title", Input).focus()
+        await type_text(pilot, "Keep me")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmDiscard)
+
+
 class SlowComment(FakeGitHub):
     """Holds each comment until `sent` is set."""
 
