@@ -119,8 +119,9 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
     BINDINGS = [
         *WRITE_BINDINGS,
         # Priority, or the scrolling body would take the arrows for horizontal scrolling.
-        Binding("left", "step(-1)", "Previous", priority=True),
-        Binding("right", "step(1)", "Next", priority=True),
+        # Left to `?`, so the footer fits 80 columns with Copy shown.
+        Binding("left", "step(-1)", "Previous", priority=True, show=False),
+        Binding("right", "step(1)", "Next", priority=True, show=False),
         *LINK_BINDINGS,
         Binding("w", "toggle_full", "Full screen"),
         Binding("h", "toggle_activity", "Activity"),

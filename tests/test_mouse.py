@@ -305,6 +305,25 @@ async def test_the_list_footer_fits_80_columns_even_while_offering_copy():
         assert keys[-1].region.right <= palette.region.x
 
 
+def footer(app: App) -> tuple[list[str], int]:
+    """The footer's keys as shown, and the column right of the last one."""
+    keys = list(app.screen.query("Footer FooterKey"))
+    return [" ".join(str(key.render()).split()) for key in keys], keys[-1].region.right
+
+
+async def test_the_detail_footer_fits_80_columns_with_and_without_copy():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        detail = await open_detail(pilot)
+        keys = ["o Open link", "w Full screen", "h Activity", "m Move", "esc Close"]
+        assert footer(app) == (keys, 59)
+
+        await drag(pilot, detail.query_one("#detail .title"), (0, 0), (3, 0))
+        await until(pilot, lambda: copy_key(app) is not None)
+        assert footer(app) == (["^c Copy", *keys], 68)  # within 80 columns
+
+
 async def test_dragging_across_a_form_field_and_ctrl_c_copies_it():
     copied: list[str] = []
     app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
