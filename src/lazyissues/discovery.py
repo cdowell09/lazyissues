@@ -53,6 +53,11 @@ class Proposal:
         """`base`'s repos setup can't read, which it keeps as they are."""
         return [repo for repo in self.base.repos if repo.name in self.unreadable]
 
+    @property
+    def has_repos(self) -> bool:
+        """Whether the config would track a repo: one chosen, or one kept."""
+        return bool(self.repos or self.kept)
+
     def seed(self) -> None:
         """Start from `base`'s repos, status sources and statuses."""
         self.choose_repos(self.base.repo_names)
@@ -144,7 +149,7 @@ class Proposal:
 
     def config(self) -> Config:
         """`base` with the repos and statuses chosen; a kept repo stays where it was."""
-        if not self.repos:
+        if not self.has_repos:
             raise ValueError("A config needs at least one repo.")
         place = {name: at for at, name in enumerate(self.base.repo_names)}
         repos = [*(self.sources[repo] for repo in self.repos), *self.kept]

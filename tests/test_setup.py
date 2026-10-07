@@ -229,3 +229,17 @@ async def test_rerunning_setup_without_the_project_scope_keeps_project_sources(t
     app, repos_screen = await rerun_and_save(github, tmp_path / "config.toml")
     assert "octo-dev/lanternfish" in repos_screen.split("Kept unchanged")[1]
     assert app.return_value == demo.config()
+
+
+async def test_setup_saves_when_every_config_repo_is_kept(tmp_path):
+    github = demo.github()
+    github.scopes = {"repo"}
+    current = replace(demo.config(), repos=[Repo("octo-dev/lanternfish", "project", "octo-dev/3")])
+    app = SetupApp(github, tmp_path / "config.toml", current)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        assert options(app) == [("octo-dev/tidepool", False)]  # offered, left unchecked
+        await click(pilot, "#next")
+        await click(pilot, "#next")
+        await click(pilot, "#save")
+    assert app.return_value == current

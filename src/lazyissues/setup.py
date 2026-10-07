@@ -170,7 +170,7 @@ class ReposScreen(_Step):
             repos.add_option((name, name, True))
 
     def action_next(self) -> None:
-        if not self.proposal.repos:
+        if not self.proposal.has_repos:
             self.notify("Pick at least one repo.", severity="warning")
             return
         self.app.push_screen(SourcesScreen(self.proposal))
