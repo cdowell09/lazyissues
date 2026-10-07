@@ -333,12 +333,14 @@ class IssueFields(Field, Widget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.filled: tuple[str, str | None] = ("", None)  # title and milestone filled in
+        self.filled_title = ""  # the title the form last filled in
+        self.filled_milestone: str | None = None  # and the milestone
 
     @property
     def changed(self) -> bool:
         title = self.query_one("#title", Input).value
-        return (title, self.query_one("#milestone", Select).selection) != self.filled
+        milestone = self.query_one("#milestone", Select).selection
+        return (title, milestone) != (self.filled_title, self.filled_milestone)
 
     def compose(self) -> ComposeResult:
         yield label("Title")
@@ -353,7 +355,7 @@ class IssueFields(Field, Widget):
     def fill(self, title: str, body: str) -> None:
         self.query_one("#title", Input).value = title
         self.query_one(TextField).fill(body)
-        self.filled = (title, self.filled[1])
+        self.filled_title = title
 
     def offer(
         self,
@@ -368,7 +370,7 @@ class IssueFields(Field, Widget):
         select = self.query_one("#milestone", Select)
         select.set_options(choices([*milestones, *([milestone] if milestone else [])]))
         select.value = milestone or Select.NULL
-        self.filled = (self.filled[0], milestone)
+        self.filled_milestone = milestone
 
     def draft(self) -> Draft:
         title = self.query_one("#title", Input).value.strip()
