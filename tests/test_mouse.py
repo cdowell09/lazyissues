@@ -349,7 +349,7 @@ async def test_filter_form_and_delete_buttons_are_clickable():
         assert filters.filters[-1] == SavedFilter("Mine", "assignee:@me")
 
         await pilot.press("x")
-        await pilot.click("#delete")
+        await pilot.click("#yes")
         await settled(pilot)
         assert [f.name for f in filters.filters] == [f.name for f in demo.config().filters]
 

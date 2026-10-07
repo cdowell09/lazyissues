@@ -14,8 +14,9 @@ from lazyissues import clipboard
 from lazyissues import config as config_module
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.config import Config, ConfigError, SavedFilter
+from lazyissues.confirm import Confirm
 from lazyissues.detail import IssueDetailScreen
-from lazyissues.forms.form import FORM_KEYS, ConfirmDiscard
+from lazyissues.forms.form import FORM_KEYS
 from lazyissues.github import Gateway
 from lazyissues.keys import KeysScreen, tab_bindings
 from lazyissues.models import IssueDetail
@@ -27,7 +28,6 @@ from lazyissues.status_list import StatusList
 from lazyissues.statuses import StatusRules
 from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views.filters import (
-    ConfirmDelete,
     FilterForm,
     FilterResults,
     Filters,
@@ -211,7 +211,6 @@ class LazyIssuesApp(App[None]):
                     ("Status shortcuts, in lists and the detail", shortcuts),
                     ("Writing, in lists and the detail", WRITE_BINDINGS),
                     ("Comment, assign, create and edit forms", FORM_KEYS),
-                    ("Discarding a changed form", ConfirmDiscard.BINDINGS),
                     ("Move picker", MovePicker.BINDINGS),
                     ("Rejected move", RejectedMoveBanner.BINDINGS),
                     ("Bulk action menus", BulkMenu.BINDINGS),
@@ -219,7 +218,7 @@ class LazyIssuesApp(App[None]):
                     ("Bulk action summary", BulkSummary.BINDINGS),
                     ("Filters", Filters.BINDINGS),
                     ("Filter form", FilterForm.BINDINGS),
-                    ("Deleting a filter", ConfirmDelete.BINDINGS),
+                    ("Discarding a changed form or deleting a filter", Confirm.BINDINGS),
                     ("Preferences", [*PreferencesScreen.BINDINGS, *StatusList.BINDINGS]),
                 ]
             )

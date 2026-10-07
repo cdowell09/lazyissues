@@ -18,6 +18,7 @@ from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, Op
 
 from lazyissues import search
 from lazyissues.config import Config, SavedFilter
+from lazyissues.confirm import Confirm
 from lazyissues.github import Gateway
 from lazyissues.menu import Menu
 from lazyissues.models import IssueDetail
@@ -156,7 +157,8 @@ class Filters(Widget):
                 if deleted == self.running:
                     await self._run_highlighted()
 
-        self.app.push_screen(ConfirmDelete(self.filters[index].name), delete)
+        question = f"Delete the filter “{self.filters[index].name}”?"
+        self.app.push_screen(Confirm(question, "Delete", "Keep"), delete)
 
     def _change(self, filters: list[SavedFilter], highlight: int) -> None:
         self.filters = filters
@@ -227,32 +229,3 @@ class FilterForm(ModalScreen[SavedFilter | None]):
         else:
             self.query_one("#error", Static).update("A filter needs a name and a query.")
             self.query_one("#query" if name else "#name", Input).focus()
-
-
-class ConfirmDelete(ModalScreen[bool]):
-    DEFAULT_CSS = """
-    ConfirmDelete { align: center middle; }
-    ConfirmDelete > Vertical {
-        width: auto; height: auto; padding: 1 2; background: $surface; border: round $error;
-    }
-    ConfirmDelete Horizontal { height: auto; margin-top: 1; }
-    """
-    AUTO_FOCUS = "#keep"
-    BINDINGS = [
-        Binding("y", "dismiss(True)", "Delete"),
-        Binding("n,escape", "dismiss(False)", "Keep"),
-    ]
-
-    def __init__(self, name: str) -> None:
-        super().__init__()
-        self.filter_name = name
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(f"Delete the filter “{self.filter_name}”? (y/n)", markup=False)
-            with Horizontal():
-                yield Button("Delete", variant="error", id="delete")
-                yield Button("Keep", id="keep")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "delete")

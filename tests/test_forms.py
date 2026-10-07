@@ -11,9 +11,10 @@ from textual.widgets import DataTable, Input, Markdown, Select, Static, TabbedCo
 
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
+from lazyissues.confirm import Confirm
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.fake import FakeGitHub
-from lazyissues.forms.form import ConfirmDiscard, Form, Picker
+from lazyissues.forms.form import Form, Picker
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, IssueDetail, Project
 from lazyissues.mover import RejectedMoveBanner
@@ -225,7 +226,7 @@ async def test_escape_on_a_changed_form_asks_and_keep_editing_keeps_the_draft():
 
         await pilot.press("escape")
         await pilot.pause()
-        assert isinstance(app.screen, ConfirmDiscard)
+        assert isinstance(app.screen, Confirm)
 
         await pilot.press("n")
         await pilot.pause()
@@ -236,7 +237,7 @@ async def test_escape_on_a_changed_form_asks_and_keep_editing_keeps_the_draft():
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
-        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert not isinstance(app.screen, (Form, Confirm))
         assert (await gateway.issue_detail("o/r", 1)).comments == ()
 
 
@@ -251,7 +252,7 @@ async def test_escape_closes_an_untouched_edit_form_and_asks_once_a_pick_changes
 
         await pilot.press("escape")  # its loaded title, body and milestone are no change
         await pilot.pause()
-        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert not isinstance(app.screen, (Form, Confirm))
 
         await pilot.press("e")
         await settle(pilot)
@@ -259,7 +260,7 @@ async def test_escape_closes_an_untouched_edit_form_and_asks_once_a_pick_changes
         await type_text(pilot, "doc")  # filtering the picker changes no field
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert not isinstance(app.screen, (Form, Confirm))
 
         await pilot.press("e")
         await settle(pilot)
@@ -267,7 +268,7 @@ async def test_escape_closes_an_untouched_edit_form_and_asks_once_a_pick_changes
         await pilot.press("space")
         await pilot.press("escape")
         await pilot.pause()
-        assert isinstance(app.screen, ConfirmDiscard)
+        assert isinstance(app.screen, Confirm)
 
 
 class SlowLabels(FakeGitHub):
@@ -310,7 +311,7 @@ async def test_text_typed_while_a_form_loads_is_a_change_escape_asks_about():
 
         await pilot.press("escape")
         await pilot.pause()
-        assert isinstance(app.screen, ConfirmDiscard)
+        assert isinstance(app.screen, Confirm)
 
 
 async def test_after_a_failed_load_escape_closes_an_empty_form_and_asks_about_text():
@@ -325,7 +326,7 @@ async def test_after_a_failed_load_escape_closes_an_empty_form_and_asks_about_te
         assert "Couldn't load" in str(app.screen.query_one("#message", Static).render())
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert not isinstance(app.screen, (Form, Confirm))
 
         await pilot.press("c")
         await settle(pilot)
@@ -333,7 +334,7 @@ async def test_after_a_failed_load_escape_closes_an_empty_form_and_asks_about_te
         await type_text(pilot, "Keep me")
         await pilot.press("escape")
         await pilot.pause()
-        assert isinstance(app.screen, ConfirmDiscard)
+        assert isinstance(app.screen, Confirm)
 
 
 class SlowComment(FakeGitHub):
@@ -366,7 +367,7 @@ async def test_escape_during_a_save_waits_for_it_and_closes_with_its_result():
 
         gateway.sent.set()
         await settle(pilot)
-        assert not isinstance(app.screen, (Form, ConfirmDiscard))
+        assert not isinstance(app.screen, (Form, Confirm))
         [comment] = (await gateway.issue_detail("o/r", 1)).comments
         assert comment.text == "On its way"
         assert app.details["o/r#1"].comments == (comment,)

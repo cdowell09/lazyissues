@@ -9,7 +9,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -26,6 +26,7 @@ from textual.widgets import (
 
 from lazyissues import editor
 from lazyissues.clipboard import COPY
+from lazyissues.confirm import Confirm
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import IssueDetail
 from lazyissues.store import now
@@ -268,7 +269,7 @@ class Form(ModalScreen[Written | None]):
             if yes:
                 self.dismiss(None)
 
-        self.app.push_screen(ConfirmDiscard(), discard)
+        self.app.push_screen(Confirm("Discard your changes?", "Discard", "Keep editing"), discard)
 
     def on_text_field_submitted(self) -> None:
         self.action_submit()
@@ -303,34 +304,6 @@ class Form(ModalScreen[Written | None]):
             )
         field.text = text
         field.focus()
-
-
-class ConfirmDiscard(ModalScreen[bool]):
-    """Asks before a changed form closes; True discards the changes."""
-
-    DEFAULT_CSS = """
-    ConfirmDiscard { align: center middle; }
-    ConfirmDiscard > Vertical {
-        width: auto; height: auto; padding: 1 2; background: $surface; border: round $warning;
-    }
-    ConfirmDiscard Horizontal { height: auto; margin-top: 1; }
-    ConfirmDiscard Button { margin-right: 1; }
-    """
-    AUTO_FOCUS = "#keep"
-    BINDINGS = [
-        Binding("y", "dismiss(True)", "Discard"),
-        Binding("n,escape", "dismiss(False)", "Keep editing"),
-    ]
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static("Discard your changes? (y/n)")
-            with Horizontal():
-                yield Button("Discard", variant="warning", id="discard", compact=True)
-                yield Button("Keep editing", id="keep", compact=True)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "discard")
 
 
 def label(text: str) -> Label:
