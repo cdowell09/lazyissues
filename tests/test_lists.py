@@ -251,6 +251,10 @@ async def test_a_long_group_header_leaves_the_columns_as_the_issues_need_them():
         assert header.startswith("▾ r / Spring cleanup of the importer (1)  ░")
         # A long header (milestone, count, progress bar) doesn't squeeze the title.
         assert shown(app, "milestones") == my_work
+        listed = table(app, "milestones")
+        lines = [listed.render_line(y).text for y in range(listed.size.height)]
+        # Cut to the Issue column's 7 cells (as wide as "    r#1"), the last one "…".
+        assert lines[1].rstrip() == " ☐  ▾ r / …"
 
 
 async def test_resizing_refits_the_columns():
