@@ -40,7 +40,8 @@ class Proposal:
 
     base: Config
     missing_project_scope: bool = False
-    unreadable: dict[str, str] = field(default_factory=dict)  # repos left out, with the error
+    # Repos setup couldn't read, with why: left out, or `kept` if `base` has them.
+    unreadable: dict[str, str] = field(default_factory=dict)
     offers: dict[str, RepoOffer] = field(default_factory=dict)  # every repo found or added
     repos: list[str] = field(default_factory=list)  # the repo set, in `offers` order
     sources: dict[str, Repo] = field(default_factory=dict)  # each repo's status source
@@ -74,9 +75,15 @@ class Proposal:
     def add(self, repo: str, offer: RepoOffer) -> str:
         """Add `repo` to the repo set and return its name as listed.
 
-        Names that differ only in case are one repo, as on GitHub. A repo uses
-        its project for statuses when it is linked to exactly one, else labels.
+        Names that differ only in case are one repo, as on GitHub. A repo keeps the
+        source `base` gives it while GitHub still offers that, else uses its project for
+        statuses when it is linked to exactly one, else labels. A project-backed `base` repo
+        stays kept without the project scope, since its project can't be read.
         """
+        configured = {r.name.casefold(): r for r in self.base.repos}.get(repo.casefold())
+        if self.missing_project_scope and configured and configured.project:
+            return configured.name
+        repo = configured.name if configured else repo
         repo = next((known for known in self.offers if known.casefold() == repo.casefold()), repo)
         self.unreadable = {
             name: error
@@ -86,9 +93,10 @@ class Proposal:
         self.offers[repo] = offer
         self.choose_repos([*self.repos, repo])
         refs = [project.ref for project in offer.projects]
-        source = self.sources.get(repo)
+        source = self.sources.get(repo) or configured
         if source is None or (source.project is not None and source.project not in refs):
-            self.sources[repo] = Repo(repo, "project", refs[0]) if len(refs) == 1 else Repo(repo)
+            source = Repo(repo, "project", refs[0]) if len(refs) == 1 else Repo(repo)
+        self.sources[repo] = source
         self.status_labels.setdefault(repo, [])
         return repo
 

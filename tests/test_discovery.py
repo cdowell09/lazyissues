@@ -164,5 +164,21 @@ async def test_a_rerun_keeps_the_config_and_adds_statuses_its_sources_now_offer(
 
 def test_a_kept_repo_added_again_once_readable_is_listed_once():
     proposal = Proposal(Config([Repo("o/r")], []), unreadable={"o/r": "SAML"})
-    proposal.add("O/R", RepoOffer(labels=(), projects=()))
-    assert proposal.config().repos == [Repo("O/R")]
+    assert proposal.add("O/R", RepoOffer(labels=(), projects=())) == "o/r"  # as configured
+    assert proposal.config().repos == [Repo("o/r")]
+
+
+KEPT_BOARD = Config([Repo("o/r", "project", "o/1")], [])
+
+
+def test_a_kept_project_backed_repo_added_again_keeps_its_configured_source():
+    proposal = Proposal(KEPT_BOARD, unreadable={"o/r": "SAML"})
+    proposal.add("o/r", RepoOffer(labels=(), projects=(BOARD, Project("o/2", "Other", ()))))
+    assert proposal.config().repos == [Repo("o/r", "project", "o/1")]
+
+
+def test_without_the_project_scope_a_kept_project_backed_repo_added_again_stays_kept():
+    proposal = Proposal(KEPT_BOARD, missing_project_scope=True, unreadable={"o/r": "scope"})
+    assert proposal.add("o/r", RepoOffer(labels=("todo",), projects=())) == "o/r"
+    assert (proposal.repos, proposal.kept) == ([], [Repo("o/r", "project", "o/1")])
+    assert proposal.config().repos == [Repo("o/r", "project", "o/1")]

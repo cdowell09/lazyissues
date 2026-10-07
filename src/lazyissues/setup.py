@@ -163,6 +163,9 @@ class ReposScreen(_Step):
         error.update("")
         self.query_one(Input).clear()
         name = self.proposal.add(name, offer)
+        if name in self.proposal.unreadable:
+            error.update(f"{name} stays as configured: {self.proposal.unreadable[name]}.")
+            return
         repos = self.query_one(SelectionList)
         if name in [repos.get_option_at_index(i).value for i in range(repos.option_count)]:
             repos.select(name)
