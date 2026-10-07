@@ -38,7 +38,11 @@ class FormError(Exception):
 
 class Field:
     """A form field, which says whether the user `changed` it since the form filled it
-    in; one the form never filled starts empty. A form asks before discarding a change."""
+    in; one the form never filled starts empty. A form asks before discarding a change.
+
+    Only what takes typing or picking is a field: the text boxes, pickers, and the title
+    and milestone. Create's repo and status choices aren't, so changing only those
+    closes without asking."""
 
     @property
     def changed(self) -> bool:
