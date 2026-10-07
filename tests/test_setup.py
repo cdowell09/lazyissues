@@ -193,3 +193,39 @@ async def test_rerunning_setup_starts_from_the_config_and_keeps_the_rest(tmp_pat
     assert app.return_value == current
     assert config_module.load(path) == current
     assert path.read_text(encoding="utf-8").startswith("# my notes\ndone_window_days = 7\n")
+
+
+async def rerun_and_save(github: FakeGitHub, path) -> tuple[SetupApp, str]:
+    """Rerun setup from the demo config, save unchanged, and return the Repos screen's text."""
+    app = SetupApp(github, path, demo.config())
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        repos_screen = " ".join(str(s.render()) for s in app.screen.query(Static))
+        await click(pilot, "#next")
+        await click(pilot, "#next")
+        await click(pilot, "#save")
+    return app, repos_screen
+
+
+async def test_rerunning_setup_keeps_a_config_repo_github_would_not_read(tmp_path):
+    class Locked(FakeGitHub):
+        async def repo_labels(self, repo: str) -> list[str]:
+            if repo == "octo-dev/lanternfish":
+                raise GitHubError("Resource protected by organization SAML enforcement.")
+            return await super().repo_labels(repo)
+
+    github = demo.github()
+    locked = Locked(github.viewer, github.issues, labels=github.labels, projects=github.projects)
+    app, repos_screen = await rerun_and_save(locked, tmp_path / "config.toml")
+    assert "Kept unchanged" in repos_screen
+    assert "octo-dev/lanternfish: Resource protected" in repos_screen
+    # Its project source, and the statuses only it may use, are saved as they were.
+    assert app.return_value == demo.config()
+
+
+async def test_rerunning_setup_without_the_project_scope_keeps_project_sources(tmp_path):
+    github = demo.github()
+    github.scopes = {"repo"}
+    app, repos_screen = await rerun_and_save(github, tmp_path / "config.toml")
+    assert "octo-dev/lanternfish" in repos_screen.split("Kept unchanged")[1]
+    assert app.return_value == demo.config()

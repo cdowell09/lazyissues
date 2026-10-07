@@ -2,7 +2,7 @@ import pytest
 
 from lazyissues import demo
 from lazyissues.config import Config, Repo, SavedFilter, Status
-from lazyissues.discovery import Proposal, RepoOffer, discover, find_repo
+from lazyissues.discovery import Proposal, RepoOffer, discover, find_repo, first_run
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
 from lazyissues.models import Issue, Project
@@ -124,7 +124,7 @@ async def test_a_re_added_repo_whose_project_is_gone_falls_back_to_labels():
 
 
 def test_an_empty_status_list_is_a_valid_proposal():
-    proposal = Proposal(viewer="me")
+    proposal = Proposal(first_run("me"))
     proposal.add("o/r", RepoOffer(labels=("bug",), projects=()))
     assert proposal.config() == Config([Repo("o/r")], [], ["me"], STARTER_FILTERS)
 
@@ -147,7 +147,7 @@ async def test_a_repo_github_wont_read_is_left_out_with_the_reason():
 
 def test_a_config_needs_a_repo():
     with pytest.raises(ValueError, match="at least one repo"):
-        Proposal(viewer="me").config()
+        Proposal(first_run("me")).config()
 
 
 async def test_a_rerun_keeps_the_config_and_adds_statuses_its_sources_now_offer():
@@ -160,3 +160,9 @@ async def test_a_rerun_keeps_the_config_and_adds_statuses_its_sources_now_offer(
         team=current.team,
         filters=current.filters,
     )
+
+
+def test_a_kept_repo_added_again_once_readable_is_listed_once():
+    proposal = Proposal(Config([Repo("o/r")], []), unreadable={"o/r": "SAML"})
+    proposal.add("O/R", RepoOffer(labels=(), projects=()))
+    assert proposal.config().repos == [Repo("O/R")]

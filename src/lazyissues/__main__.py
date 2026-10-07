@@ -35,15 +35,10 @@ def main() -> None:
         # Each app runs its own event loop, so each gets its own gateway (and HTTP client).
         current = config
         config = SetupApp(GraphQLGateway(token), path, current).run()
+        if config is None and current is None:
+            sys.exit("lazyissues: setup quit before saving. Run lazyissues again to finish it.")
         if config is None:
-            sys.exit(
-                "lazyissues: setup quit before saving. "
-                + (
-                    "Run lazyissues again to finish it."
-                    if current is None
-                    else f"{path} is unchanged."
-                )
-            )
+            sys.exit(f"lazyissues: setup quit before saving. {path} is unchanged.")
     LazyIssuesApp(config, GraphQLGateway(token), cache_dir(), config_path=path).run()
 
 

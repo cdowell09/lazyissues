@@ -114,12 +114,20 @@ class ReposScreen(_Step):
                 id="scope-warning",
                 classes="warning",
             )
-        if self.proposal.unreadable:
-            yield Static(
-                "Left out because GitHub wouldn't read them (add one below to retry):\n"
-                + "\n".join(f"{repo}: {error}" for repo, error in self.proposal.unreadable.items()),
-                classes="warning",
-            )
+        kept = {repo.name for repo in self.proposal.kept}
+        for repos, why in (
+            (
+                kept,
+                "Kept unchanged because setup couldn't read them (edit config.toml to drop one):",
+            ),
+            (
+                self.proposal.unreadable.keys() - kept,
+                "Left out because GitHub wouldn't read them (add one below to retry):",
+            ),
+        ):
+            if repos:
+                errors = (f"{repo}: {self.proposal.unreadable[repo]}" for repo in sorted(repos))
+                yield Static("\n".join([why, *errors]), classes="warning")
         yield Label("Repos to track", classes="title")
         yield Static("Suggested from repos where you have open issues.", classes="hint")
         yield SelectionList[str](
@@ -249,11 +257,10 @@ class StatusesScreen(_Step):
             yield Button("Move up", action="screen.move(-1)")
             yield Button("Move down", action="screen.move(1)")
             yield Button("Save", id="save", variant="primary", action="screen.save")
+        base = self.proposal.base
         yield Static(
-            "Your team roster, saved filters and preferences stay as they are."
-            if self.proposal.current
-            else f"Your team roster starts with {self.proposal.viewer}, and the Filters tab"
-            " with Ready for me and Needs triage.",
+            f"Your team roster is {', '.join(base.team) or 'empty'}, and the Filters tab has"
+            f" {', '.join(f.name for f in base.filters) or 'no filters'}.",
             classes="hint",
         )
 
