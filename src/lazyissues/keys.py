@@ -1,12 +1,24 @@
 """Keybinding help (`?`), drawn from the bindings themselves so it can't drift from them."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
+
+
+def tab_bindings(titles: Sequence[str]) -> list[Binding]:
+    """The app's keys for its tabs `titles`: `1` to `9` jump to one, `[`/`]` step through them."""
+    return [
+        *(
+            Binding(str(i), f"app.show_tab({i - 1})", title, show=False)
+            for i, title in enumerate(titles[:9], 1)
+        ),
+        Binding("left_square_bracket", "app.step_tab(-1)", "Previous tab", show=False),
+        Binding("right_square_bracket", "app.step_tab(1)", "Next tab", show=False),
+    ]
 
 
 class KeysScreen(ModalScreen[None]):

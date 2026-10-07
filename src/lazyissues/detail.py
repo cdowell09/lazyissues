@@ -5,7 +5,6 @@ through issues here tells the view, through `select`, which issue to select.
 """
 
 import asyncio
-import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
@@ -23,7 +22,7 @@ from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Event, EventKind, Issue, IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.store import now
-from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
+from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
 
 _ACTIONS: dict[EventKind, str] = {
     "commented": "commented",
@@ -122,8 +121,8 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
         # Priority, or the scrolling body would take the arrows for horizontal scrolling.
         Binding("left", "step(-1)", "Previous", priority=True),
         Binding("right", "step(1)", "Next", priority=True),
-        Binding("z", "toggle_full", "Full screen"),
-        Binding("o", "open_in_browser", "Open in browser"),
+        *LINK_BINDINGS,
+        Binding("w", "toggle_full", "Full screen"),
         Binding("h", "toggle_activity", "Activity"),
         Binding("m", "move", "Move"),
         Binding("escape", "dismiss", "Close"),
@@ -265,9 +264,6 @@ class IssueDetailScreen(IssueActions, ModalScreen[None]):
 
     def action_toggle_full(self) -> None:
         self.toggle_class("full")
-
-    def action_open_in_browser(self) -> None:
-        webbrowser.open(self.issue.url)
 
     def action_move(self) -> None:
         self.mover.pick(self.issue)

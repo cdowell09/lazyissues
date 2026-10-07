@@ -1,5 +1,6 @@
 """The list tabs: Team, Unassigned, and the keys every list tab shares."""
 
+import webbrowser
 from datetime import UTC, datetime, timedelta
 
 from listed import drawn, plain, show_tab
@@ -264,3 +265,17 @@ def test_title_keeps_its_minimum_when_the_others_just_fit_beside_it():
 def test_one_cell_short_cuts_the_widest_other_column():
     space = 48 + issue_list.MIN_TITLE - 1
     assert issue_list.fit(NATURAL, space) == [1, 14, issue_list.MIN_TITLE, 11, 9, 12]
+
+
+async def test_o_opens_and_y_copies_the_link_of_the_issue_under_the_cursor(monkeypatch):
+    opened: list[str] = []
+    copied: list[str] = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
+    async with app.run_test() as pilot:
+        await settled(pilot)
+        await pilot.press("o", "y")  # on the first group's header: nothing to open or copy
+        assert (opened, copied) == ([], [])
+        await pilot.press("down", "o", "y")  # lanternfish#9
+        url = "https://github.com/octo-dev/lanternfish/issues/9"
+        assert (opened, copied) == ([url], [url])

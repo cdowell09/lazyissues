@@ -284,6 +284,27 @@ async def test_the_footer_offers_copy_while_text_is_selected():
         assert copied == [ref]
 
 
+async def test_the_list_footer_fits_80_columns_even_while_offering_copy():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        cell = first_cell(app, 1)
+        start = ISSUE_TEXT + len(cell) - len(cell.lstrip())
+        await drag(pilot, table(app), (start, 2), (start + 3, 2))  # the footer's widest
+        await until(pilot, lambda: copy_key(app) is not None)
+        *keys, palette = app.screen.query("Footer FooterKey")  # ^p, docked on the right
+        assert [" ".join(str(key.render()).split()) for key in keys] == [
+            "o Open link",
+            "/ Search",
+            "m Move",
+            "^c Copy",
+            "q Quit",
+            "r Refresh",
+            "? Keys",
+        ]
+        assert keys[-1].region.right <= palette.region.x
+
+
 async def test_dragging_across_a_form_field_and_ctrl_c_copies_it():
     copied: list[str] = []
     app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
