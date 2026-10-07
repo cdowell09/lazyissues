@@ -252,7 +252,7 @@ async def test_dragging_across_detail_text_and_ctrl_c_copies_it():
 async def test_dragging_across_a_list_row_selects_its_text_without_opening_it():
     copied: list[str] = []
     app = LazyIssuesApp(demo.config(), demo.github(), system_clipboard=copied.append)
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(120, 24)) as pilot:  # wide enough not to cut refs
         await settled(pilot)
         await click_row(pilot, 1)
         cell = first_cell(app, 1)

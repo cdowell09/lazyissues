@@ -6,7 +6,10 @@ from textual.widgets import DataTable, TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
+from lazyissues.config import Config, Repo, Status
 from lazyissues.detail import IssueDetailScreen
+from lazyissues.fake import FakeGitHub
+from lazyissues.models import Issue
 from lazyissues.views import issue_list
 from lazyissues.views.issue_list import IssueList
 
@@ -182,3 +185,62 @@ async def test_typing_a_search_filters_once_after_a_pause(monkeypatch):
         await pilot.pause(0.3)
         assert len(draws) == 1
         assert firsts(app, "my-work") == ["In Progress (1)", "lanternfish#4"]
+
+
+LONG = "A title long enough to push every column after it off an eighty-column terminal"
+
+
+def long_titled_app() -> LazyIssuesApp:
+    url = "https://github.com/o/r/issues/1"
+    issue = Issue("o/r", 1, LONG, url, ("me",), ("todo", "bug"))
+    config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")])
+    return LazyIssuesApp(config, FakeGitHub(viewer="me", issues=[issue]))
+
+
+def shown(app: LazyIssuesApp) -> tuple[str, str]:
+    """My Work's column headings and its issue's row, as the terminal shows them."""
+    listed = table(app, "my-work")
+    lines = [listed.render_line(y).text for y in range(listed.size.height)]
+    return lines[0], next(line for line in lines if "r#1" in line)
+
+
+async def test_at_80_columns_every_column_shows_and_a_long_title_ends_in_an_ellipsis():
+    app = long_titled_app()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        headings, row = shown(app)
+        assert headings.split() == ["Issue", "Title", "Status", "Assignees", "Labels"]
+        assert row.rstrip().split("  ")[-1].strip() == "todo, bug"  # the last column, whole
+        title = row.split("r#1")[1].split("…")[0].strip()
+        assert LONG.startswith(title) and len(title) > 10  # cut short, with room to read
+
+
+async def test_resizing_refits_the_columns():
+    app = long_titled_app()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(pilot)
+        await pilot.resize_terminal(160, 24)
+        await pilot.pause()
+        assert LONG in shown(app)[1]  # the whole title, uncut
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        assert LONG not in shown(app)[1] and "…" in shown(app)[1]
+        assert shown(app)[1].rstrip().endswith("todo, bug")
+
+
+# Natural widths of the checkbox, Issue, Title, Status, Assignees and Labels columns.
+NATURAL = [1, 15, 40, 11, 9, 12]  # 48 without Title
+
+
+def test_title_takes_the_room_the_other_columns_leave():
+    assert issue_list.fit(NATURAL, 100) == [1, 15, 52, 11, 9, 12]
+
+
+def test_title_keeps_its_minimum_when_the_others_just_fit_beside_it():
+    space = 48 + issue_list.MIN_TITLE
+    assert issue_list.fit(NATURAL, space) == [1, 15, issue_list.MIN_TITLE, 11, 9, 12]
+
+
+def test_one_cell_short_cuts_the_widest_other_column():
+    space = 48 + issue_list.MIN_TITLE - 1
+    assert issue_list.fit(NATURAL, space) == [1, 14, issue_list.MIN_TITLE, 11, 9, 12]

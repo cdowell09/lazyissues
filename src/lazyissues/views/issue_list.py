@@ -51,6 +51,7 @@ from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
 # redraw drops the label column until the table is next idle, and a click in between
 # landed on the cell beside it. Columns stay put.
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels")
+TITLE, MIN_TITLE = COLUMNS.index("Title"), 10  # the column that fills the width (`fit`)
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
 SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
 AGE_TICK = 60  # seconds between redraws of the data's age; past a minute it counts minutes
@@ -58,6 +59,21 @@ CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles 
 DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
 # How a row stands out, by its table component class (`IssueTable.highlights`).
 GROUP_ROW, CHECKED_ROW = "issue-table--group", "issue-table--checked"
+
+
+def fit(widths: Sequence[int], space: int) -> list[int]:
+    """The width of each column whose content is `widths` wide, in `space` cells.
+
+    Every column but Title keeps its natural width and Title takes what's left, at least
+    `MIN_TITLE`. When the others don't fit beside that, the widest are cut until they do.
+    """
+    others = [width for at, width in enumerate(widths) if at != TITLE]
+    cap = max(others)
+    while cap > 1 and sum(min(width, cap) for width in others) > space - MIN_TITLE:
+        cap -= 1
+    fitted = [min(width, cap) for width in widths]
+    fitted[TITLE] = max(MIN_TITLE, space - sum(fitted) + fitted[TITLE])
+    return fitted
 
 
 def arrow(folded: bool | None) -> str:
@@ -82,12 +98,34 @@ class IssueTable(DataTable):
     DEFAULT_CSS = """
     IssueTable > .issue-table--group { background: $foreground 8%; text-style: bold; }
     IssueTable > .issue-table--checked { background: $accent 20%; }
+    /* The space a scrollbar takes is kept even without one, so the columns fit either way. */
+    IssueTable { scrollbar-gutter: stable; }
     /* Bold marks a group header, so the cursor only colors its row. */
     IssueTable:focus > .datatable--cursor { text-style: none; }
     """
     # Each row's component class, if it has one, by row index. Set it only with the rows
     # themselves (`IssueList.show`): Textual caches drawn rows until they change.
     highlights: Sequence[str | None] = ()
+
+    def show_rows(self, rows: Sequence[tuple[str | None, Sequence[str | Text]]]) -> None:
+        """Replace the rows with `rows`, each a row key and its cells, with the columns
+        `fit` to the table's width; text cut short ends in `…`.
+
+        GitHub text is never markup, so string cells are shown as typed."""
+        self.clear(columns=True)
+        cells = [[Text(cell) if isinstance(cell, str) else cell for cell in row] for _, row in rows]
+        for cell in (cell for row in cells for cell in row):
+            cell.overflow = "ellipsis"
+        natural = [
+            max([len(label), *(row[at].cell_len for row in cells)])
+            for at, label in enumerate(COLUMNS)
+        ]
+        padding = 2 * self.cell_padding * len(COLUMNS)
+        widths = fit(natural, self.scrollable_content_region.width - padding)
+        for label, width in zip(COLUMNS, widths, strict=True):
+            self.add_column(label, width=width)
+        for (key, _), row in zip(rows, cells, strict=True):
+            self.add_row(*row, key=key)
 
     def _get_row_style(self, row_index: int, base_style: Style) -> Style:
         # Textual's private hook (as of 8.2, hence `textual<9`) for the style of a row
@@ -179,6 +217,7 @@ class IssueList(IssueActions, Widget):
         self._groups: dict[str, Group] = {}  # the shown groups, by name
         self.error: str | None = None  # why the latest refresh failed
         self._stale = False  # changed while hidden: redraw when shown
+        self._width: int | None = None  # the list's width when last drawn
 
     @property
     def issues(self) -> list[Issue]:
@@ -199,7 +238,7 @@ class IssueList(IssueActions, Widget):
         yield Static("Refreshing…", id="refreshing")
 
     def on_mount(self) -> None:
-        self.query_one(DataTable).add_columns(*COLUMNS)
+        self.query_one(IssueTable).show_rows([])  # the column headings
         self.mover.changed.subscribe(self, self._on_moved)
         self.writer.changed.subscribe(self, self._on_written)
         self.set_interval(AGE_TICK, self._show_filters)
@@ -212,6 +251,10 @@ class IssueList(IssueActions, Widget):
             self.reload()
         if self._stale:
             self.show()
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self._width is not None and event.size.width != self._width:
+            self.redraw()  # the columns fit the width they were drawn at
 
     def on_unmount(self) -> None:
         self.store.flush()  # the snapshot of changes still waiting to be saved
@@ -295,28 +338,32 @@ class IssueList(IssueActions, Widget):
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
         self._stale = False
+        self._width = self.size.width
         table = self.query_one(IssueTable)
         row, selected = table.cursor_row, None
         if table.rows:
             selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        table.clear()
         self._rows = []
+        keys: set[str] = set()
+        rows: list[tuple[str | None, Sequence[str | Text]]] = []
         groups = visible_groups(self.store.issues, self.grouping(), self.rules, self.state)
         self._groups = {group.name: group for group in groups}
         for group in groups:
             mark = self._mark(issue.key for issue in group.issues)
-            table.add_row(mark, self.header(group), *[""] * (len(COLUMNS) - 2))
+            rows.append((None, (mark, self.header(group), *[""] * (len(COLUMNS) - 2))))
             self._rows.append((group.name, None))
             for listed in group.rows:
                 # Team lists a shared issue under each assignee; row keys must be unique.
                 key = listed.issue.key
-                key = key if key not in table.rows else f"{group.name}/{key}"
-                table.add_row(self._mark([listed.issue.key]), *self._cells(listed), key=key)
+                key = key if key not in keys else f"{group.name}/{key}"
+                keys.add(key)
+                rows.append((key, (self._mark([listed.issue.key]), *self._cells(listed))))
                 self._rows.append((group.name, listed))
         if not groups:
             # With nothing loaded, a failed refresh's error stays after its toast goes.
             message = "No issues match." if self.state.filtering else self.error or self.EMPTY
-            table.add_row("", "", message, *[""] * (len(COLUMNS) - 3))
+            rows.append((None, ("", "", message, *[""] * (len(COLUMNS) - 3))))
+        table.show_rows(rows)
         table.highlights = self._highlights()
         if selected is not None and selected in table.rows:  # group headers have no key
             row = table.get_row_index(selected)
