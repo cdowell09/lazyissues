@@ -16,6 +16,7 @@ class Issue:
     labels: tuple[str, ...] = ()
     closed: bool = False
     closed_at: str | None = None  # ISO 8601, as GitHub sends it; None while open
+    updated_at: str | None = None  # ISO 8601, as GitHub sends it; when it last changed
     milestone: str | None = None  # its milestone's title
     parent: str | None = None  # its parent issue's key, when it is a sub-issue
     # The issue's Status on each project it is on, keyed by project "owner/number".

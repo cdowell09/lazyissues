@@ -19,6 +19,7 @@ def node(number: int) -> dict:
         "labels": {"nodes": [{"name": "bug"}]},
         "state": "OPEN",
         "closedAt": None,
+        "updatedAt": "2026-09-01T12:00:00Z",
         "milestone": None,
         "parent": None,
         "projectItems": {"nodes": []},
@@ -51,7 +52,15 @@ async def test_search_follows_pages_and_builds_issues():
     issues = await gateway(handler).search_issues("is:open repo:o/r")
 
     assert issues == [
-        Issue("o/r", n, f"Issue {n}", f"https://github.com/o/r/issues/{n}", ("me",), ("bug",))
+        Issue(
+            "o/r",
+            n,
+            f"Issue {n}",
+            f"https://github.com/o/r/issues/{n}",
+            ("me",),
+            ("bug",),
+            updated_at="2026-09-01T12:00:00Z",
+        )
         for n in (1, 2)
     ]
     assert [v["after"] for v in sent] == [None, "c1"]
@@ -87,6 +96,18 @@ async def test_search_reads_state_and_each_projects_status():
     assert issue.closed
     assert issue.closed_at == "2026-09-30T12:00:00Z"
     assert issue.project_statuses == {"o/1": "In Progress"}
+
+
+async def test_search_requests_and_reads_when_each_issue_was_updated():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "updatedAt" in json.loads(request.content)["query"]
+        updated = node(6) | {"updatedAt": "2026-10-01T08:30:00Z"}
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [updated]}
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    [issue] = await gateway(handler).search_issues("x")
+
+    assert issue.updated_at == "2026-10-01T08:30:00Z"
 
 
 async def test_search_reads_the_milestone_and_the_parent_issue():

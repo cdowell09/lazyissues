@@ -300,3 +300,56 @@ async def test_fake_lists_are_copies_a_caller_can_change():
 
     assert await github.repo_labels("o/r") == ["bug"]
     assert await github.assignable_users("o/r") == ["me"]
+
+
+WRITES = {
+    "comment": lambda g: g.comment("o/r", 1, "Hi"),
+    "change_assignees": lambda g: g.change_assignees("o/r", 1, add=["sam"], remove=[]),
+    "update_issue": lambda g: g.update_issue("o/r", 1, {"title": "Renamed"}),
+    "add_labels": lambda g: g.add_labels("o/r", 1, ["todo"]),
+    "remove_labels": lambda g: g.remove_labels("o/r", 1, ["bug"]),
+    "add_to_project": lambda g: g.add_to_project("o/r", 1, "o/1"),
+    "set_project_status": lambda g: g.set_project_status("o/r", 1, "o/1", "Done"),
+    "close_issue": lambda g: g.close_issue("o/r", 1, CloseReason.COMPLETED),
+    "reopen_issue": lambda g: g.reopen_issue("o/r", 1),
+    "assign": lambda g: g.assign("o/r", 1, "sam"),
+}
+LONG_AGO = "2020-01-01T00:00:00+00:00"
+
+
+def stale() -> FakeGitHub:
+    """`editable`, with its issue last updated long ago and on a project."""
+    github = editable()
+    github.issues[0] = replace(
+        github.issues[0], updated_at=LONG_AGO, project_statuses={"o/1": "Todo"}
+    )
+    github.projects["o/r"] = [Project("o/1", "Board", ("Todo", "Done"))]
+    github.project_items.add(("o/1", "o/r#1"))
+    return github
+
+
+def is_now(stamp: str | None, since: datetime) -> bool:
+    return stamp is not None and since <= datetime.fromisoformat(stamp) <= datetime.now(UTC)
+
+
+@pytest.mark.parametrize("write", WRITES.values(), ids=list(WRITES))
+async def test_fake_stamps_an_issue_updated_now_on_every_write(write):
+    github = stale()
+    since = datetime.now(UTC).replace(microsecond=0)
+
+    await write(github)
+
+    assert is_now((await found(github, 1)).updated_at, since)
+
+
+async def test_fake_stamps_a_new_issue_updated_when_created():
+    since = datetime.now(UTC).replace(microsecond=0)
+    detail = await editable().create_issue("o/r", "Two")
+    assert is_now(detail.issue.updated_at, since)
+
+
+async def test_fake_keeps_the_update_time_through_a_rejected_write():
+    github = stale()
+    with pytest.raises(GitHubError):
+        await github.assign("o/r", 1, "nobody")
+    assert (await found(github, 1)).updated_at == LONG_AGO

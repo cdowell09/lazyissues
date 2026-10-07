@@ -230,6 +230,19 @@ def test_z_on_a_parent_or_its_sub_issue_folds_the_parent_and_otherwise_the_group
     assert [row.fold_key for row in in_progress.rows] == [None]
 
 
+def test_a_group_lists_the_most_recently_updated_first_with_sub_issues_under_their_parent():
+    issues = [
+        issue(1, "todo", updated_at="2026-10-01T09:00:00Z"),
+        issue(2, "todo", parent="a/x#1", updated_at="2026-10-01T09:00:02Z"),  # the latest
+        issue(3, "todo", updated_at="2026-10-01T09:00:01Z"),
+        issue(4, "todo", parent="a/x#1", updated_at="2026-10-01T09:00:03Z"),
+        issue(5, "todo"),  # no update time: last
+    ]
+    assert nested(issues) == [
+        ("Todo", 5, [(3, 0, None), (1, 0, None), (4, 1, None), (2, 1, None), (5, 0, None)])
+    ]
+
+
 MILESTONES = [Milestone("a/x", "v1"), Milestone("a/y", "v1"), Milestone("a/x", "Empty")]
 
 
