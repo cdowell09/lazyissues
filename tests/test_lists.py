@@ -236,8 +236,9 @@ async def test_at_80_columns_every_column_shows_and_a_long_title_ends_in_an_elli
         headings, row = shown(app)
         assert headings.split() == ["Issue", "Title", "Status", "Assignees", "Labels", "Updated"]
         assert row.split()[-3:] == ["todo,", "bug", "3d"]  # the last columns, whole
-        title = row.split("r#1")[1].split("…")[0].strip()
-        assert LONG.startswith(title) and len(title) > 10  # cut short, with room to read
+        # Title gets the 25 cells left of 80: 2 for the scrollbar gutter, 14 for the
+        # columns' padding, and 39 the other columns need (1+7+6+9+9+7).
+        assert f"r#1  {LONG[:24]}…  Todo" in row
 
 
 async def test_a_long_group_header_leaves_the_columns_as_the_issues_need_them():
@@ -265,22 +266,23 @@ async def test_resizing_refits_the_columns():
         assert shown(app)[1].rstrip().endswith("todo, bug  3d")
 
 
-# Natural widths of the checkbox, Issue, Title, Status, Assignees and Labels columns.
-NATURAL = [1, 15, 40, 11, 9, 12]  # 48 without Title
+# Natural widths of the checkbox, Issue, Title, Status, Assignees, Labels and Updated
+# columns.
+NATURAL = [1, 15, 40, 11, 9, 12, 7]  # 55 without Title
 
 
 def test_title_takes_the_room_the_other_columns_leave():
-    assert issue_list.fit(NATURAL, 100) == [1, 15, 52, 11, 9, 12]
+    assert issue_list.fit(NATURAL, 100) == [1, 15, 45, 11, 9, 12, 7]
 
 
 def test_title_keeps_its_minimum_when_the_others_just_fit_beside_it():
-    space = 48 + issue_list.MIN_TITLE
-    assert issue_list.fit(NATURAL, space) == [1, 15, issue_list.MIN_TITLE, 11, 9, 12]
+    space = 55 + issue_list.MIN_TITLE
+    assert issue_list.fit(NATURAL, space) == [1, 15, issue_list.MIN_TITLE, 11, 9, 12, 7]
 
 
 def test_one_cell_short_cuts_the_widest_other_column():
-    space = 48 + issue_list.MIN_TITLE - 1
-    assert issue_list.fit(NATURAL, space) == [1, 14, issue_list.MIN_TITLE, 11, 9, 12]
+    space = 55 + issue_list.MIN_TITLE - 1
+    assert issue_list.fit(NATURAL, space) == [1, 14, issue_list.MIN_TITLE, 11, 9, 12, 7]
 
 
 async def test_o_opens_and_y_copies_the_link_of_the_issue_under_the_cursor(monkeypatch):
