@@ -6,7 +6,7 @@ the list widget only draws what `visible_groups` returns.
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from lazyissues.models import Issue, Milestone
 from lazyissues.statuses import IssueStatus, StatusRules
@@ -167,13 +167,19 @@ def visible_groups(
     for name, members in grouping(matching, lambda issue: statuses[issue.key]):
         if not members and not _contains(name, state.search):
             continue  # an empty member group shows unless a search names someone else
-        # Most recently updated first. Stamps are ISO 8601 in UTC, so they sort as text;
-        # an issue without one sorts last.
-        members = sorted(members, key=lambda i: i.updated_at or "", reverse=True)
+        members = sorted(members, key=_updated, reverse=True)
         folded = name in state.folded
         rows = [] if folded else _nested(members, state.folded, statuses)
         groups.append(Group(name, members, rows, folded))
     return groups
+
+
+def _updated(issue: Issue) -> datetime:
+    """When `issue` last changed, to list the latest first; one with no time sorts last."""
+    return datetime.fromisoformat(issue.updated_at) if issue.updated_at else _NEVER
+
+
+_NEVER = datetime.min.replace(tzinfo=UTC)
 
 
 def _nested(

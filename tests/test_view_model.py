@@ -243,6 +243,15 @@ def test_a_group_lists_the_most_recently_updated_first_with_sub_issues_under_the
     ]
 
 
+def test_update_times_order_by_the_moment_whether_github_or_the_demo_wrote_them():
+    issues = [
+        issue(1, "todo", updated_at="2026-10-01T09:00:00Z"),  # as GitHub sends it
+        issue(2, "todo", updated_at="2026-10-01T09:00:00.500000+00:00"),  # isoformat()
+        issue(3, "todo", updated_at="2026-10-01T10:30:00+01:00"),  # 09:30 UTC
+    ]
+    assert nested(issues) == [("Todo", 3, [(3, 0, None), (2, 0, None), (1, 0, None)])]
+
+
 MILESTONES = [Milestone("a/x", "v1"), Milestone("a/y", "v1"), Milestone("a/x", "Empty")]
 
 
