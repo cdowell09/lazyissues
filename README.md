@@ -83,22 +83,27 @@ Names match ignoring case and treating `-`, `_` and spaces alike, so an `in-prog
 | `a` | lists, detail | assign: pick from the team roster and the repo's assignable users |
 | `c` | lists, detail | create an issue |
 | `e` | lists, detail | edit the issue's title, body, labels and milestone |
+| `o` | lists, detail | open the issue in your browser |
+| `y` | lists, detail | copy the issue's URL, through your terminal and the system clipboard (see [Mouse](#mouse)) |
 | `Space` | lists | select the issue for a bulk action, or on a group header the whole group; again to unselect |
 | `A` `u` | lists | select every issue shown; clear the selection |
 | `B` | lists | bulk move or assign the selected issues |
 | `←` `→` | detail | previous or next issue in the list underneath |
-| `z` | detail | toggle full screen |
-| `o` | detail | open the issue in your browser |
+| `w` | detail | toggle full screen |
 | `h` | detail | toggle the activity timeline |
 | `Esc` | detail | close |
 | `r` | lists | refresh the tab from GitHub |
 | `Enter` | Filters sidebar | run the highlighted filter |
 | `Tab` `Shift+Tab` | Filters | move between the sidebar and the results |
 | `n` `e` `x` | Filters sidebar | new filter, edit or delete the highlighted one |
+| `1`–`5` | anywhere | go to a tab and its list, Filters included |
+| `[` `]` | anywhere | go to the previous or next tab |
 | `S` | anywhere | preferences |
 | `?` | anywhere | list every key |
 | `Ctrl+C` | anywhere | copy the selected text |
 | `q` | anywhere | quit |
+
+The footer shows the keys you reach for most, so it fits an 80-column terminal; `?` lists every key.
 
 The detail shows the issue's fields, its Markdown body, comments oldest first, project fields such as Theme, and its parent and sub-issues. It shows the copy from earlier in the session at once and fetches the latest from GitHub every time it opens.
 
@@ -112,7 +117,7 @@ Drag across text in a list, the detail or a form field to select it. Press `Ctrl
 
 ## Moves
 
-`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists don't already use.
+`m` lists the moves the issue can make: every status in your list for a label-backed repo, or the project's Status options for a project-backed one (leaving out options that mean done), then Close as completed, Close as not planned and Close as duplicate of… (which asks for the original as `12`, `repo#12`, `owner/repo#12` or a URL), or Reopen for a closed issue. A status with a `key` in `config.toml` has a shortcut: the key opens the picker on that status, and the uppercase key moves at once. Built-in keys keep their meaning, so give statuses keys the lists, the detail and the tab keys don't already use.
 
 - In a label-backed repo, a move adds the status's label (creating it in the repo if it has none) and removes every other status label.
 - In a project-backed repo, a move adds the issue to the project if it isn't on it, then sets its Status.

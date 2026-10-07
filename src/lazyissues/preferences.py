@@ -113,10 +113,10 @@ class PreferencesScreen(ModalScreen[Config | None]):
         key = event.value.strip() or None
         if owner := self.query_one(StatusList).set_key(key):
             self.notify(f"{key} already moves to {owner}.", severity="warning")
-        elif key and {key.lower(), key.upper()} & bound_keys():
+        elif key and {key.lower(), key.upper()} & bound_keys(self.tabs):
             self.notify(
-                f"{key} is already a key in the lists and the detail, so this shortcut"
-                " won't work there.",
+                f"{key} is already a key in the lists, the detail or for tabs, so this"
+                " shortcut won't work there.",
                 severity="warning",
             )
 

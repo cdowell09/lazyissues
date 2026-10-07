@@ -19,6 +19,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.coordinate import Coordinate
+from textual.keys import key_to_character
 from textual.reactive import var
 from textual.selection import Selection
 from textual.strip import Strip
@@ -31,6 +32,7 @@ from lazyissues.config import Config
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.forms.form import Written
 from lazyissues.github import Gateway, GitHubError
+from lazyissues.keys import tab_bindings
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.mover import Mover
 from lazyissues.statuses import DONE, StatusRules
@@ -45,7 +47,7 @@ from lazyissues.view_model import (
     focusable_statuses,
     visible_groups,
 )
-from lazyissues.writer import WRITE_BINDINGS, IssueActions, Writer
+from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
 
 # The first column is each row's checkbox, a column rather than Textual's row label: a
 # redraw drops the label column until the table is next idle, and a click in between
@@ -167,19 +169,20 @@ class IssueList(IssueActions, Widget):
     """
     BINDINGS = [
         *WRITE_BINDINGS,
+        *LINK_BINDINGS,
         Binding("slash", "search", "Search"),
         Binding("escape", "clear_search", "Clear search", show=False),
-        Binding("f", "focus_status(1)", "Focus status"),
+        Binding("f", "focus_status(1)", "Focus status", show=False),
         Binding("F", "focus_status(-1)", "Focus previous status", show=False),
-        Binding("d", "toggle_done", "Done"),
-        Binding("z", "fold", "Fold"),
+        Binding("d", "toggle_done", "Done", show=False),
+        Binding("z", "fold", "Fold", show=False),
         Binding("Z", "fold_all", "Fold all", show=False),
-        Binding("R", "repo_filter", "Repo"),
+        Binding("R", "repo_filter", "Repo", show=False),
         Binding("m", "move", "Move"),
-        Binding("space", "toggle_selected", "Select"),
+        Binding("space", "toggle_selected", "Select", show=False),
         Binding("A", "select_all", "Select all shown", show=False),
         Binding("u", "clear_selection", "Clear selection", show=False),
-        Binding("B", "bulk", "Bulk move or assign"),
+        Binding("B", "bulk", "Bulk move or assign", show=False),
     ]
 
     LABEL: ClassVar[str]  # the tab's title
@@ -616,7 +619,8 @@ class IssueList(IssueActions, Widget):
         )
 
 
-def bound_keys() -> set[str]:
-    """Every key a list or the detail binds, which a status shortcut can't take over."""
-    bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS]
-    return set(BindingsMap(bindings).key_to_bindings)
+def bound_keys(tabs: Sequence[str]) -> set[str]:
+    """Every key a list or the detail binds, and the app's keys for its `tabs`, which a
+    status shortcut can't take over; as the character typed, where a key has one."""
+    bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS, *tab_bindings(tabs)]
+    return {key_to_character(key) or key for key in BindingsMap(bindings).key_to_bindings}

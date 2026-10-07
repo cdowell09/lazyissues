@@ -166,7 +166,7 @@ async def test_arrows_step_through_the_issues_over_group_headers_and_move_the_se
         assert list_cursor(app) == 1
 
 
-async def test_z_toggles_full_screen():
+async def test_w_toggles_full_screen_and_z_does_not():
     app = app_on(github())
     async with app.run_test(size=(100, 30)) as pilot:
         await open_detail(pilot)
@@ -175,9 +175,11 @@ async def test_z_toggles_full_screen():
             return app.screen.query_one("#detail").outer_size.width
 
         assert width() < 100
-        await pilot.press("z")
+        await pilot.press("z")  # z folds, in the lists
+        assert width() < 100
+        await pilot.press("w")
         assert width() == 100
-        await pilot.press("z")
+        await pilot.press("w")
         assert width() < 100
 
 
@@ -200,6 +202,16 @@ async def test_o_opens_the_issue_in_the_browser(monkeypatch):
         await open_detail(pilot)
         await pilot.press("right", "o")
         assert opened == ["https://github.com/o/r/issues/2"]
+
+
+async def test_y_copies_the_issue_url():
+    copied: list[str] = []
+    config = Config(repos=[Repo("o/r")], statuses=[Status("Todo"), Status("Doing")])
+    app = LazyIssuesApp(config, github(), system_clipboard=copied.append)
+    async with app.run_test() as pilot:
+        await open_detail(pilot)
+        await pilot.press("right", "y")
+        assert copied == ["https://github.com/o/r/issues/2"]
 
 
 async def test_h_shows_the_activity_timeline_and_back():
