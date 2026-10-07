@@ -151,7 +151,7 @@ Before anything is sent, a confirmation lists the issues that will change and th
 - **Create** starts in the repo you last created in, else the selected issue's. Its status is set as a move once the issue exists: the status label in a label-backed repo, or the project's Status in a project-backed one. If GitHub rejects that, the issue is still created and the rejected move stays on screen.
 - **Edit** starts from the issue's cached detail when there is one (else GitHub's copy) and sends only the fields you changed, so edits made elsewhere meanwhile are kept.
 
-If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
+If you changed anything, `Esc` asks before discarding it: `y` discards, `n` or `Esc` keeps editing. A form whose save is already on its way closes once GitHub answers. If GitHub rejects a write, its error shows in the form and nothing you typed is lost.
 
 ## Cache
 
