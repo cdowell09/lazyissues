@@ -15,7 +15,7 @@ from lazyissues import config as config_module
 from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.config import Config, ConfigError, SavedFilter
 from lazyissues.detail import IssueDetailScreen
-from lazyissues.forms.form import FORM_KEYS
+from lazyissues.forms.form import FORM_KEYS, ConfirmDiscard
 from lazyissues.github import Gateway
 from lazyissues.keys import KeysScreen, tab_bindings
 from lazyissues.models import IssueDetail
@@ -211,6 +211,7 @@ class LazyIssuesApp(App[None]):
                     ("Status shortcuts, in lists and the detail", shortcuts),
                     ("Writing, in lists and the detail", WRITE_BINDINGS),
                     ("Comment, assign, create and edit forms", FORM_KEYS),
+                    ("Discarding a changed form", ConfirmDiscard.BINDINGS),
                     ("Move picker", MovePicker.BINDINGS),
                     ("Rejected move", RejectedMoveBanner.BINDINGS),
                     ("Bulk action menus", BulkMenu.BINDINGS),

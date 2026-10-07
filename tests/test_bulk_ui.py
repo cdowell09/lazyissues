@@ -108,10 +108,10 @@ async def test_space_checks_an_issue_or_a_whole_group_and_u_clears_them():
         await pilot.press("slash", *"glow", "enter")
         assert checked(app) == {LANTERN_4}
         filters = app.query_one("#my-work #filters", Static)
-        assert str(filters.render()) == "search: glow  ·  selected: 5"
+        assert str(filters.render()).startswith("search: glow  ·  selected: 5  ·  updated ")
         await pilot.press("u")
         assert checked(app) == set()
-        assert str(filters.render()) == "search: glow"
+        assert str(filters.render()).startswith("search: glow  ·  updated ")
 
 
 async def test_the_selection_survives_a_refresh():
@@ -360,7 +360,7 @@ async def test_selecting_updates_checkboxes_in_place_and_keeps_the_cursor(monkey
         assert table(app).cursor_row == table(app).get_row_index(TIDE_15)
         assert rebuilds == []
         filters = app.query_one("#my-work #filters", Static)
-        assert str(filters.render()) == "selected: 1"
+        assert str(filters.render()).startswith("selected: 1  ·  updated ")
 
 
 async def redraws_during_bulk(pilot: Pilot, monkeypatch, *prompts: str) -> int:

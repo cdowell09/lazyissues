@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from lazyissues.config import Config, Repo, Status
@@ -5,6 +7,7 @@ from lazyissues.models import Issue, Milestone
 from lazyissues.statuses import DONE, NO_STATUS, StatusRules
 from lazyissues.view_model import (
     ViewState,
+    age,
     by_assignee,
     by_milestone,
     by_status,
@@ -284,3 +287,21 @@ def test_each_shown_issues_status_is_resolved_once_whatever_the_grouping(name):
 
     assert rules.calls == 2
     assert [r.status.name for g in groups for r in g.rows] == ["Todo"]
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "shown"),
+    [
+        (timedelta(seconds=0), "0s"),
+        (timedelta(seconds=59.9), "59s"),
+        (timedelta(seconds=60), "1m"),
+        (timedelta(minutes=59, seconds=59), "59m"),
+        (timedelta(minutes=60), "1h"),
+        (timedelta(hours=23, minutes=59, seconds=59), "23h"),
+        (timedelta(hours=24), "1d"),
+        (timedelta(days=400), "400d"),
+        (timedelta(seconds=-5), "0s"),  # a clock set back reads as just now
+    ],
+)
+def test_an_age_shows_its_largest_whole_unit(elapsed, shown):
+    assert age(elapsed) == shown

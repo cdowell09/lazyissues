@@ -39,10 +39,11 @@ class SetupApp(App[Config]):
         Binding("r", "retry", "Retry"),
     ]
 
-    def __init__(self, github: Gateway, path: Path) -> None:
+    def __init__(self, github: Gateway, path: Path, current: Config | None = None) -> None:
         super().__init__()
         self.github = github
         self.path = path
+        self.current = current  # the config a rerun starts from; None on first run
         self.failed = False  # discovery failed; `r` retries it
 
     def compose(self) -> ComposeResult:
@@ -64,7 +65,7 @@ class SetupApp(App[Config]):
         status = self.query_one("#status", Static)
         status.update("Looking for repos where you have open issues…")
         try:
-            proposal = await discover(self.github)
+            proposal = await discover(self.github, self.current)
         except GitHubError as e:
             status.update(f"Setup couldn't read GitHub: {e}\n\nPress r to try again.")
             self.failed = True
@@ -249,8 +250,10 @@ class StatusesScreen(_Step):
             yield Button("Move down", action="screen.move(1)")
             yield Button("Save", id="save", variant="primary", action="screen.save")
         yield Static(
-            f"Your team roster starts with {self.proposal.viewer}, and the Filters tab with"
-            " Ready for me and Needs triage.",
+            "Your team roster, saved filters and preferences stay as they are."
+            if self.proposal.current
+            else f"Your team roster starts with {self.proposal.viewer}, and the Filters tab"
+            " with Ready for me and Needs triage.",
             classes="hint",
         )
 
