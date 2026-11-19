@@ -130,7 +130,6 @@ class Gateway(Protocol):
 
 
 def _env_token() -> str | None:
-    """GitHub token from `GH_TOKEN` or `GITHUB_TOKEN`, when set and non-blank."""
     for name in ("GH_TOKEN", "GITHUB_TOKEN"):
         if token := os.environ.get(name, "").strip():
             return token
@@ -592,6 +591,10 @@ class GraphQLGateway:
             self._viewer = viewer["login"], _parse_scopes(headers)
         return self._viewer[0] if self._viewer is not None else None
 
+    def _cache_issue_ids(self, nodes: Sequence[dict[str, Any]]) -> None:
+        for node in nodes:
+            self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+
     async def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]:
         after: str | None = None
         fetched = 0
@@ -603,8 +606,7 @@ class GraphQLGateway:
             first_page = False
             page = data["search"]
             nodes = [node for node in page["nodes"] if node]
-            for node in nodes:  # remember the IDs, so a write needs no lookup
-                self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+            self._cache_issue_ids(nodes)
             fetched += len(nodes)
             page_info = page["pageInfo"]
             has_next_page = bool(page_info["hasNextPage"])
@@ -642,8 +644,7 @@ class GraphQLGateway:
                 self._repo_ids[repo] = repo_id
             issues_conn = repo_data["issues"]
             nodes = [node for node in issues_conn["nodes"] if node]
-            for node in nodes:  # remember the IDs, so a write needs no lookup
-                self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+            self._cache_issue_ids(nodes)
             fetched += len(nodes)
             page_info = issues_conn["pageInfo"]
             has_next_page = bool(page_info["hasNextPage"])

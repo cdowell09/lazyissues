@@ -53,8 +53,6 @@ _RepoEvent = _PageEvent | _DoneEvent
 
 
 class _InFlightRepo:
-    """Single-flight publisher for one repo's in-progress `repo_open_issues_pages` stream."""
-
     def __init__(self, repo_key: str, requested_at: float) -> None:
         self.repo_key = repo_key
         self.requested_at = requested_at
@@ -92,20 +90,10 @@ class _InFlightRepo:
 
 
 def _dedupe(issues: Sequence[Issue]) -> tuple[Issue, ...]:
-    """Deduplicate by issue key, keeping first-seen order and the latest copy of each key."""
-    result: list[Issue] = []
-    positions: dict[str, int] = {}
-    for issue in issues:
-        if (index := positions.get(issue.key)) is not None:
-            result[index] = issue
-        else:
-            positions[issue.key] = len(result)
-            result.append(issue)
-    return tuple(result)
+    return tuple({issue.key: issue for issue in issues}.values())
 
 
 def _apply_write(issues: tuple[Issue, ...], issue: Issue) -> tuple[Issue, ...]:
-    """Overlay one confirmed write onto a repo's open issues; idempotent."""
     if issue.closed:
         return tuple(item for item in issues if item.key != issue.key)
     for index, existing in enumerate(issues):

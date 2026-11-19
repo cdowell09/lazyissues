@@ -11,7 +11,7 @@ class Team(IssueList):
     LABEL = "Team"
     EMPTY = "Add GitHub logins to `team` in config.toml."
     USE_REPO_SYNC = True
-    viewer: str | None = None  # set from the first page response, for the grouping
+    viewer: str | None = None
 
     @property
     def members(self) -> list[str]:

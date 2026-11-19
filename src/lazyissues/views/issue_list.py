@@ -747,9 +747,7 @@ class IssueList(IssueActions, Widget):
         if any(shown):
             self.redraw()
         if any(w.regroups and not on for w, on in zip(writes, shown, strict=True)):
-            self.reload(
-                force=False
-            )  # only this tab's search knows whether an issue belongs here now
+            self.reload(force=False)
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""
@@ -864,7 +862,6 @@ class IssueList(IssueActions, Widget):
 
 
 def _targets_only_synced_repos(query: str, oversized_cf: set[str]) -> bool:
-    """Whether `query` scopes itself to `repo:` terms that were already synced."""
     repos = [term[5:].casefold() for term in query.split() if term.startswith("repo:")]
     return bool(repos) and not any(repo in oversized_cf for repo in repos)
 
