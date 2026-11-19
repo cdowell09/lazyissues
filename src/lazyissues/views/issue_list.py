@@ -6,11 +6,13 @@ owns the tab's issue store and view state, and draws whatever
 `view_model.visible_groups` returns.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.segment import Segment
 from rich.style import Style
@@ -27,10 +29,8 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
-from lazyissues import bulk_actions, search
+from lazyissues import search
 from lazyissues.config import Config
-from lazyissues.detail import IssueDetailScreen
-from lazyissues.forms.form import Written
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.keys import tab_bindings
 from lazyissues.models import Issue, IssueDetail
@@ -48,6 +48,9 @@ from lazyissues.view_model import (
     visible_groups,
 )
 from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
+
+if TYPE_CHECKING:
+    from lazyissues.forms.form import Written
 
 # The first column is each row's checkbox, a column rather than Textual's row label: a
 # redraw drops the label column until the table is next idle, and a click in between
@@ -486,6 +489,8 @@ class IssueList(IssueActions, Widget):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:
             return  # a group header
+        from lazyissues.detail import IssueDetailScreen
+
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
             IssueDetailScreen(
@@ -623,6 +628,8 @@ class IssueList(IssueActions, Widget):
         if not issues:
             self.notify("Select issues with Space, or every one shown with A.", title="Bulk")
             return
+        from lazyissues import bulk_actions
+
         self.app.run_worker(
             bulk_actions.run(self.mover, self.writer, issues, self.action_clear_selection)
         )
@@ -631,5 +638,7 @@ class IssueList(IssueActions, Widget):
 def bound_keys(tabs: Sequence[str]) -> set[str]:
     """Every key a list or the detail binds, and the app's keys for its `tabs`, which a
     status shortcut can't take over; as the character typed, where a key has one."""
+    from lazyissues.detail import IssueDetailScreen
+
     bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS, *tab_bindings(tabs)]
     return {key_to_character(key) or key for key in BindingsMap(bindings).key_to_bindings}

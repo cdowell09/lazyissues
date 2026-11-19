@@ -8,6 +8,7 @@ from lazyissues import __main__, demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
+from lazyissues.setup import SetupApp
 
 
 def rows(app: LazyIssuesApp) -> list[list[str]]:
@@ -58,10 +59,8 @@ def launch(monkeypatch, tmp_path):
         started.append(("setup", self.path))
         return demo.config()
 
-    monkeypatch.setattr(__main__.SetupApp, "run", run_setup)
-    monkeypatch.setattr(
-        __main__.LazyIssuesApp, "run", lambda self: started.append(("app", self.config))
-    )
+    monkeypatch.setattr(SetupApp, "run", run_setup)
+    monkeypatch.setattr(LazyIssuesApp, "run", lambda self: started.append(("app", self.config)))
     return started
 
 
@@ -90,9 +89,7 @@ def test_without_a_config_setup_runs_then_the_app_starts_with_its_config(launch,
 def test_the_app_saves_to_the_config_it_was_started_with(launch, monkeypatch, tmp_path):
     path = tmp_path / "config.toml"
     __main__.config_module.save(demo.config(), path)
-    monkeypatch.setattr(
-        __main__.LazyIssuesApp, "run", lambda self: launch.append(("app", self.config_path))
-    )
+    monkeypatch.setattr(LazyIssuesApp, "run", lambda self: launch.append(("app", self.config_path)))
     __main__.main()
     assert launch == [("app", path)]
 
@@ -102,7 +99,7 @@ def test_setup_flag_reruns_setup_from_the_current_config(launch, monkeypatch, tm
     __main__.config_module.save(demo.config(), path)
     monkeypatch.setattr(sys, "argv", ["lazyissues", "--setup"])
     monkeypatch.setattr(
-        __main__.SetupApp, "run", lambda self: launch.append(("setup", self.current)) or None
+        SetupApp, "run", lambda self: launch.append(("setup", self.current)) or None
     )
     with pytest.raises(SystemExit, match=r"config\.toml is unchanged"):
         __main__.main()
@@ -116,7 +113,7 @@ def test_setup_flag_without_a_config_runs_first_run_setup(launch, monkeypatch, t
 
 
 def test_quitting_setup_starts_nothing(launch, monkeypatch):
-    monkeypatch.setattr(__main__.SetupApp, "run", lambda self: None)
+    monkeypatch.setattr(SetupApp, "run", lambda self: None)
     with pytest.raises(SystemExit, match="setup"):
         __main__.main()
     assert launch == []

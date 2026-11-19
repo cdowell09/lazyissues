@@ -120,3 +120,17 @@ async def test_startup_draws_cached_snapshot_only_for_the_start_tab(tmp_path):
 
         await show_tab(pilot, "unassigned")
         assert len(app.query_one("#unassigned IssueTable", IssueTable).rows) > 0
+
+
+def test_startup_imports_skip_detail_setup_demo_and_markdown():
+    import subprocess
+    import sys
+
+    check = (
+        "import sys, lazyissues.__main__, lazyissues.app; "
+        "loaded = [m for m in ('markdown_it', 'pygments', 'lazyissues.detail', "
+        "'lazyissues.setup', 'lazyissues.demo') if m in sys.modules]; "
+        "assert not loaded, loaded"
+    )
+    proc = subprocess.run([sys.executable, "-c", check], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr

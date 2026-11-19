@@ -4,11 +4,8 @@ import argparse
 import sys
 
 from lazyissues import config as config_module
-from lazyissues import demo
-from lazyissues.app import LazyIssuesApp
 from lazyissues.config import ConfigError
 from lazyissues.github import GitHubError, GraphQLGateway, gh_token
-from lazyissues.setup import SetupApp
 from lazyissues.store import cache_dir
 
 
@@ -21,6 +18,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.demo:
+        from lazyissues import demo
+        from lazyissues.app import LazyIssuesApp
+
         LazyIssuesApp(demo.config(), demo.github()).run()
         return
 
@@ -32,6 +32,8 @@ def main() -> None:
     except (ConfigError, GitHubError) as e:
         sys.exit(f"lazyissues: {e}")
     if config is None or args.setup:
+        from lazyissues.setup import SetupApp
+
         # Each app runs its own event loop, so each gets its own gateway (and HTTP client).
         current = config
         config = SetupApp(GraphQLGateway(token), path, current).run()
@@ -39,6 +41,8 @@ def main() -> None:
             sys.exit("lazyissues: setup quit before saving. Run lazyissues again to finish it.")
         if config is None:
             sys.exit(f"lazyissues: setup quit before saving. {path} is unchanged.")
+    from lazyissues.app import LazyIssuesApp
+
     LazyIssuesApp(config, GraphQLGateway(token), cache_dir(), config_path=path).run()
 
 

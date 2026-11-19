@@ -4,10 +4,12 @@ One `Mover` serves every view. A view binds `m` to `pick` and passes its key pre
 `shortcut`, and redraws when `changed` publishes an issue.
 """
 
+from __future__ import annotations
+
 import webbrowser
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import events
@@ -18,14 +20,15 @@ from textual.screen import ModalScreen
 from textual.signal import Signal
 from textual.widgets import Static
 
-from lazyissues.bulk import Outcome
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
-from lazyissues.move_picker import MovePicker
 from lazyissues.move_planner import MoveTo, Planner, Skip, Step, Target, apply, send
 from lazyissues.move_tracker import MoveTracker, Rejected
 from lazyissues.statuses import StatusRules
 from lazyissues.store import now
+
+if TYPE_CHECKING:
+    from lazyissues.bulk import Outcome
 
 
 class RejectedMoveBanner(ModalScreen[None]):
@@ -113,6 +116,8 @@ class Mover:
         planner = await self.planner([issue])
         if planner is None:
             return
+        from lazyissues.move_picker import MovePicker
+
         picker = MovePicker(
             issue,
             planner.targets(issue),

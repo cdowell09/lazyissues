@@ -12,23 +12,15 @@ from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 
 from lazyissues import clipboard
 from lazyissues import config as config_module
-from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
 from lazyissues.config import Config, ConfigError, SavedFilter
-from lazyissues.confirm import Confirm
-from lazyissues.detail import IssueDetailScreen
-from lazyissues.forms.form import FORM_KEYS
 from lazyissues.github import Gateway
-from lazyissues.keys import KeysScreen, tab_bindings
+from lazyissues.keys import tab_bindings
 from lazyissues.models import IssueDetail
-from lazyissues.move_picker import MovePicker
 from lazyissues.move_tracker import MoveTracker
 from lazyissues.mover import Mover, RejectedMoveBanner
-from lazyissues.preferences import PreferencesScreen
-from lazyissues.status_list import StatusList
 from lazyissues.statuses import StatusRules
 from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views.filters import (
-    FilterForm,
     FilterResults,
     Filters,
     results_id,
@@ -161,6 +153,8 @@ class LazyIssuesApp(App[None]):
                     view.reload()
 
     def action_preferences(self) -> None:
+        from lazyissues.preferences import PreferencesScreen
+
         if not isinstance(self.screen, PreferencesScreen):
             self.push_screen(PreferencesScreen(self.config, self.tab_titles), self.configure)
 
@@ -195,6 +189,16 @@ class LazyIssuesApp(App[None]):
             view.configure(config)
 
     def action_keys(self) -> None:
+        from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
+        from lazyissues.confirm import Confirm
+        from lazyissues.detail import IssueDetailScreen
+        from lazyissues.forms.form import FORM_KEYS
+        from lazyissues.keys import KeysScreen
+        from lazyissues.move_picker import MovePicker
+        from lazyissues.preferences import PreferencesScreen
+        from lazyissues.status_list import StatusList
+        from lazyissues.views.filters import FilterForm
+
         shortcuts = [
             Binding(key, "", f"Move to {status} (uppercase: at once)")
             for key, status in self.mover.rules.shortcuts().items()
