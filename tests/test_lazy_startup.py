@@ -1,10 +1,21 @@
-"""Startup refreshes only the start tab; other tabs refresh the first time they are shown."""
+"""Startup syncs configured repos once, preloads inactive tabs, and defers drawing hidden tabs."""
 
-from listed import show_tab
-from textual.widgets import TabbedContent
+import asyncio
+from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
+
+from listed import plain, show_tab
+from textual.widgets import DataTable, TabbedContent
 
 from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
+from lazyissues.config import Config, Repo, Status
+from lazyissues.fake import FakeGitHub
+from lazyissues.models import Issue, IssuePage
+from lazyissues.repo_sync import REPO_SYNC_MAX_OPEN
+from lazyissues.views.issue_list import IssueList, IssueTable
+from lazyissues.views.milestones import Milestones
+from lazyissues.views.my_work import MyWork
 from lazyissues.views.team import Team
 from lazyissues.views.unassigned import Unassigned
 
@@ -15,40 +26,144 @@ async def settle(pilot) -> None:
     await pilot.pause()
 
 
-async def test_startup_searches_only_the_start_tab_and_a_tab_searches_once_when_opened():
+async def until(pilot, condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await pilot.pause(0.01)
+    raise AssertionError("timed out")
+
+
+def _build_repo_issues(count: int) -> list[Issue]:
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issues: list[Issue] = []
+    for number in range(1, count + 1):
+        if number == 1:
+            assignees, milestone = ("me",), "v1"
+        elif number == 2:
+            assignees, milestone = ("sam",), "v1"
+        elif number == 3:
+            assignees, milestone = (), None
+        else:
+            assignees, milestone = ("other",), None
+        issues.append(
+            Issue(
+                "o/r",
+                number,
+                f"Issue {number}",
+                f"https://github.com/o/r/issues/{number}",
+                assignees=assignees,
+                labels=("todo",),
+                milestone=milestone,
+                updated_at=(base + timedelta(minutes=number)).isoformat(),
+            )
+        )
+    return issues
+
+
+class TrackingGitHub(FakeGitHub):
+    """Counts `whoami()` calls on top of `FakeGitHub`."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.whoami_calls = 0
+
+    async def whoami(self) -> tuple[str, set[str]]:
+        self.whoami_calls += 1
+        return await super().whoami()
+
+
+class GatedSync(FakeGitHub):
+    """Holds `repo_open_issues_pages` until `gate` is opened."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.gate = asyncio.Event()
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        await self.gate.wait()
+        async for page in super().repo_open_issues_pages(repo):
+            yield page
+
+
+class Page2Gated(FakeGitHub):
+    """Yields Page 1 of `repo_open_issues_pages` immediately, then holds Page 2 until `page2`."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.page1_sent = asyncio.Event()
+        self.page2 = asyncio.Event()
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        async for index, page in _enumerate_async(super().repo_open_issues_pages(repo)):
+            if index == 0:
+                yield page
+                self.page1_sent.set()
+            else:
+                await self.page2.wait()
+                yield page
+
+
+async def _enumerate_async(
+    stream: AsyncIterator[IssuePage],
+) -> AsyncIterator[tuple[int, IssuePage]]:
+    index = 0
+    async for item in stream:
+        yield index, item
+        index += 1
+
+
+async def test_startup_syncs_repos_once_and_preloads_inactive_tabs_without_drawing_them():
+    config = demo.config()
     github = demo.github()
-    app = LazyIssuesApp(demo.config(), github)
+    app = LazyIssuesApp(config, github)
     async with app.run_test() as pilot:
         await settle(pilot)
-        assert github.searched and all("assignee:@me" in q for q in github.searched)
+        assert github.synced_repos == config.repo_names
+        assert github.searched == []
 
-        github.searched.clear()
+        for view_type in (MyWork, Team, Milestones, Unassigned):
+            view = app.query_one(view_type)
+            assert view._loaded
+            assert view.store.issues
+
+        assert len(app.query_one("#my-work IssueTable", IssueTable).rows) > 0
+        for hidden in ("#team", "#milestones", "#unassigned"):
+            assert len(app.query_one(f"{hidden} IssueTable", IssueTable).rows) == 0
+
         tabs = app.query_one(TabbedContent)
         tabs.active = "tab-3"  # Unassigned
         await settle(pilot)
-        assert len(github.searched) == 1 and all("no:assignee" in q for q in github.searched)
+        assert len(app.query_one("#unassigned IssueTable", IssueTable).rows) > 0
+        assert github.searched == []
+        assert github.synced_repos == config.repo_names
 
-        github.searched.clear()
         tabs.active = "tab-0"
         tabs.active = "tab-3"
         await settle(pilot)
         assert github.searched == []
+        assert github.synced_repos == config.repo_names
 
 
 async def test_a_reload_of_a_tab_never_shown_waits_for_its_first_show():
-    github = demo.github()
+    github = GatedSync(**vars(demo.github()))
     app = LazyIssuesApp(demo.config(), github)
     async with app.run_test() as pilot:
-        await settle(pilot)
+        await pilot.pause()
         team = app.query_one(Team)
-        github.searched.clear()
+        assert not team._loaded
 
         team.reload()  # as a write that regroups does to every tab
-        await settle(pilot)
+        await pilot.pause()
+        assert not team._loaded
+        assert not team.refreshing
         assert github.searched == []
 
+        github.gate.set()
         await show_tab(pilot, "team")
-        assert github.searched and len(github.searched) == len(set(github.searched))
+        assert team._loaded
+        assert team.store.issues
+        assert github.searched == []
 
 
 async def test_a_refresh_that_finishes_while_a_tab_is_hidden_redraws_it_when_shown(monkeypatch):
@@ -83,7 +198,7 @@ async def test_applying_a_config_to_a_hidden_tab_redraws_it_only_when_shown(monk
     app = LazyIssuesApp(demo.config(), demo.github())
     async with app.run_test() as pilot:
         await settle(pilot)
-        team = app.query_one(Team)  # never shown
+        team = app.query_one(Team)  # preloaded while hidden, never shown
         drawn: list[None] = []
         real_show = team.show
 
@@ -94,15 +209,15 @@ async def test_applying_a_config_to_a_hidden_tab_redraws_it_only_when_shown(monk
         monkeypatch.setattr(team, "show", counting_show)
 
         team.configure(app.config)
+        await settle(pilot)
         assert drawn == []
 
         await show_tab(pilot, "team")
-        assert len(drawn) == 2  # the pending redraw, then the first refresh's result
+        assert len(drawn) == 1
 
 
 async def test_startup_draws_cached_snapshot_only_for_the_start_tab(tmp_path):
     from lazyissues.store import IssueStore, snapshot_path
-    from lazyissues.views.issue_list import IssueTable
 
     config = demo.config()
     github = demo.github()
@@ -120,6 +235,137 @@ async def test_startup_draws_cached_snapshot_only_for_the_start_tab(tmp_path):
 
         await show_tab(pilot, "unassigned")
         assert len(app.query_one("#unassigned IssueTable", IssueTable).rows) > 0
+
+
+async def test_300_open_issues_uses_shared_repo_sync_without_searches():
+    config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")], team=["sam"])
+    github = TrackingGitHub(
+        viewer="me",
+        issues=_build_repo_issues(REPO_SYNC_MAX_OPEN),
+        milestones={"o/r": ["v1"]},
+    )
+    app = LazyIssuesApp(config, github)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        assert github.synced_repos == ["o/r"]
+        assert github.searched == []
+        assert github.whoami_calls == 0
+        assert [i.key for i in app.query_one(MyWork).store.issues] == ["o/r#1"]
+        assert {i.key for i in app.query_one(Team).store.issues} == {"o/r#1", "o/r#2"}
+        assert {i.key for i in app.query_one(Milestones).store.issues} == {"o/r#1", "o/r#2"}
+        assert [i.key for i in app.query_one(Unassigned).store.issues] == ["o/r#3"]
+        for hidden in ("#team", "#milestones", "#unassigned"):
+            assert len(app.query_one(f"{hidden} IssueTable", IssueTable).rows) == 0
+
+
+async def test_301_open_issues_falls_back_to_search_batches_viewer_and_preloads_sequentially(
+    monkeypatch,
+):
+    config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")], team=["sam"])
+    github = TrackingGitHub(
+        viewer="me",
+        issues=_build_repo_issues(REPO_SYNC_MAX_OPEN + 1),
+        milestones={"o/r": ["v1"]},
+    )
+    events: list[tuple[str, str]] = []
+    active_preloads = 0
+    max_concurrent_preloads = 0
+    real_preload = IssueList.preload
+
+    async def tracked_preload(self: IssueList) -> None:
+        nonlocal active_preloads, max_concurrent_preloads
+        active_preloads += 1
+        max_concurrent_preloads = max(max_concurrent_preloads, active_preloads)
+        events.append(("start", self.id or ""))
+        try:
+            await real_preload(self)
+        finally:
+            events.append(("end", self.id or ""))
+            active_preloads -= 1
+
+    monkeypatch.setattr(IssueList, "preload", tracked_preload)
+
+    app = LazyIssuesApp(config, github)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        assert github.synced_repos == ["o/r"]
+        assert github.searched
+        assert github.whoami_calls == 0
+        assert app.query_one(Team).viewer == "me"
+        assert max_concurrent_preloads == 1
+        assert events == [
+            ("start", "team"),
+            ("end", "team"),
+            ("start", "milestones"),
+            ("end", "milestones"),
+            ("start", "unassigned"),
+            ("end", "unassigned"),
+        ]
+        assert [i.key for i in app.query_one(MyWork).store.issues] == ["o/r#1"]
+        assert {i.key for i in app.query_one(Team).store.issues} == {"o/r#1", "o/r#2"}
+        assert {i.key for i in app.query_one(Milestones).store.issues} == {"o/r#1", "o/r#2"}
+        assert [i.key for i in app.query_one(Unassigned).store.issues] == ["o/r#3"]
+        for hidden in ("#team", "#milestones", "#unassigned"):
+            assert len(app.query_one(f"{hidden} IssueTable", IssueTable).rows) == 0
+
+
+async def test_progressive_pages_render_before_page_2_and_preserve_adr_0003_moves():
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issues = [
+        Issue(
+            "o/r",
+            number,
+            f"Issue {number}",
+            f"https://github.com/o/r/issues/{number}",
+            assignees=("me",),
+            labels=("todo",),
+            updated_at=(base + timedelta(minutes=10 - number)).isoformat(),
+        )
+        for number in range(1, 5)
+    ]
+    config = Config(
+        repos=[Repo("o/r")],
+        statuses=[Status("Todo"), Status("In Review", key="v")],
+    )
+    github = Page2Gated(
+        viewer="me",
+        issues=issues,
+        labels={"o/r": ["todo", "in-review"]},
+        page_size=2,
+    )
+    app = LazyIssuesApp(config, github)
+
+    def listed_keys() -> list[str]:
+        table = app.query_one("#my-work DataTable", DataTable)
+        return [key for row in table.ordered_rows if (key := row.key.value)]
+
+    def status_groups() -> dict[str, list[str]]:
+        table = app.query_one("#my-work DataTable", DataTable)
+        grouped: dict[str, list[str]] = {}
+        current: list[str] = []
+        for row, text in zip(table.ordered_rows, plain(table), strict=True):
+            if row.key.value is None:
+                current = grouped.setdefault(text.rsplit(" (", 1)[0], [])
+            else:
+                current.append(row.key.value)
+        return grouped
+
+    async with app.run_test() as pilot:
+        await github.page1_sent.wait()
+        await until(pilot, lambda: listed_keys() == ["o/r#1", "o/r#2"])
+        assert not github.page2.is_set()
+
+        table = app.query_one("#my-work DataTable", DataTable)
+        table.move_cursor(row=table.get_row_index("o/r#1"))
+        await pilot.pause()
+        await pilot.press("V")
+        await until(pilot, lambda: "o/r#1" in status_groups().get("In Review", []))
+
+        github.page2.set()
+        await settle(pilot)
+        assert set(listed_keys()) == {"o/r#1", "o/r#2", "o/r#3", "o/r#4"}
+        assert status_groups()["In Review"] == ["o/r#1"]
+        assert status_groups()["Todo"] == ["o/r#2", "o/r#3", "o/r#4"]
 
 
 def test_startup_imports_skip_detail_setup_demo_and_markdown():

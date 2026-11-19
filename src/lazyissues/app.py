@@ -1,8 +1,11 @@
 """The Textual application shell: one tab per view."""
 
-from collections.abc import Callable
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from textual import events
 from textual.app import App, ComposeResult
@@ -15,11 +18,12 @@ from lazyissues import config as config_module
 from lazyissues.config import Config, ConfigError, SavedFilter
 from lazyissues.github import Gateway
 from lazyissues.keys import tab_bindings
-from lazyissues.models import IssueDetail
+from lazyissues.models import Issue, IssueDetail
 from lazyissues.move_tracker import MoveTracker
 from lazyissues.mover import Mover, RejectedMoveBanner
+from lazyissues.repo_sync import RepoSync
 from lazyissues.statuses import StatusRules
-from lazyissues.store import IssueStore, snapshot_path
+from lazyissues.store import IssueStore, now, snapshot_path
 from lazyissues.views.filters import (
     FilterResults,
     Filters,
@@ -31,6 +35,9 @@ from lazyissues.views.my_work import MyWork
 from lazyissues.views.team import Team
 from lazyissues.views.unassigned import Unassigned
 from lazyissues.writer import WRITE_BINDINGS, Writer
+
+if TYPE_CHECKING:
+    from lazyissues.forms.form import Written
 
 # What the mouse does, for the `?` help: its gestures aren't bindings, so they are listed here.
 MOUSE = [
@@ -79,9 +86,12 @@ class LazyIssuesApp(App[None]):
         self.config_path = config_path
         self.details: dict[str, IssueDetail] = {}  # by issue key; every view's detail cache
         self.moves = MoveTracker()  # every view's store shares it
+        self.repo_sync = RepoSync(github)
         self.mover = Mover(self, github, StatusRules(config), self.moves, self.details)
         self.writer = Writer(self, github, config, self.moves, self.mover, self.details)
         self.tab_titles: list[str] = []  # set by compose
+        self._builtin_tabs: list[IssueList] = []
+        self._preloaded = False
 
     def store(self, view: str) -> IssueStore:
         """The issue store for one view, with its own snapshot."""
@@ -91,20 +101,29 @@ class LazyIssuesApp(App[None]):
         return IssueStore(path, self.moves)
 
     def tabs(self) -> list[tuple[str, Widget]]:
-        def view(cls: type[IssueList], id: str) -> tuple[str, Widget]:
+        def view(cls: type[IssueList], id: str) -> tuple[str, IssueList]:
             store = self.store(id)
             return cls.LABEL, cls(
-                self.config, self.github, store, self.details, self.mover, self.writer, id=id
+                self.config,
+                self.github,
+                store,
+                self.details,
+                self.mover,
+                self.writer,
+                id=id,
+                repo_sync=self.repo_sync,
+                on_first_load=self._on_first_tab_loaded,
             )
 
-        filters = Filters(self.config.filters, self.filter_results, self.save_filters, id="filters")
-        return [
+        builtin = [
             view(MyWork, "my-work"),
             view(Team, "team"),
             view(Milestones, "milestones"),
             view(Unassigned, "unassigned"),
-            ("Filters", filters),
         ]
+        self._builtin_tabs = [tab for _, tab in builtin]
+        filters = Filters(self.config.filters, self.filter_results, self.save_filters, id="filters")
+        return [*builtin, ("Filters", filters)]
 
     def filter_results(self, query: str) -> FilterResults:
         """The results list of a saved filter's query, with its own snapshot."""
@@ -150,7 +169,7 @@ class LazyIssuesApp(App[None]):
         if pane := self.query_one(TabbedContent).active_pane:
             for view in pane.query(IssueList):
                 if view.display:  # Filters keeps the results of filters run earlier, hidden
-                    view.reload()
+                    view.reload(force=True)
 
     def action_preferences(self) -> None:
         from lazyissues.preferences import PreferencesScreen
@@ -244,7 +263,29 @@ class LazyIssuesApp(App[None]):
 
     def on_mount(self) -> None:
         self.theme = self.config.preferences.theme
+        self.writer.changed.subscribe(self, self._on_written, immediate=True)
+        self.mover.changed.subscribe(self, self._on_moved, immediate=True)
         self.focus_list()  # so arrows and Enter work at once
+
+    def _on_written(self, writes: Sequence[Written]) -> None:
+        for written in writes:
+            self.repo_sync.record_write(written.detail.issue, written.sent_at)
+
+    def _on_moved(self, moved: Sequence[Issue]) -> None:
+        rejected_keys = {r.issue.key for r in self.moves.rejected}
+        for issue in moved:
+            if not self.moves.pending(issue.key) and issue.key not in rejected_keys:
+                self.repo_sync.record_write(issue, now())
+
+    def _on_first_tab_loaded(self) -> None:
+        if not self._preloaded:
+            self._preloaded = True
+            self.run_worker(self._preload_tabs(), exclusive=True)
+
+    async def _preload_tabs(self) -> None:
+        for view in self._builtin_tabs:
+            if not view._loaded:
+                await view.preload()
 
     def action_show_tab(self, index: int) -> None:
         self.query_one(TabbedContent).active = f"tab-{index}"

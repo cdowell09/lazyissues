@@ -1,6 +1,7 @@
 """My Work opens from the snapshot and refreshes in the background."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 from textual.app import App
@@ -12,7 +13,7 @@ from lazyissues import store as store_module
 from lazyissues.app import LazyIssuesApp
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssueDetail
+from lazyissues.models import Issue, IssueDetail, IssuePage
 from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views import issue_list
 from lazyissues.views.issue_list import IssueList
@@ -27,7 +28,7 @@ MY_DEMO_ISSUES = [  # in display order, by status group
 
 
 class Gated(FakeGitHub):
-    """A fake GitHub, seeded from `github`, whose searches wait until the test opens the gate."""
+    """A fake GitHub, seeded from `github`, whose reads wait until the test opens the gate."""
 
     def __init__(self, github: FakeGitHub) -> None:
         super().__init__(**vars(github))
@@ -37,10 +38,20 @@ class Gated(FakeGitHub):
         await self.gate.wait()
         return await super().search_issues(query)
 
+    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        await self.gate.wait()
+        async for page in super().repo_open_issues_pages(repo):
+            yield page
+
 
 class Unreachable(FakeGitHub):
     async def search_issues(self, query: str) -> list[Issue]:
         raise GitHubError("Couldn't reach GitHub: timed out")
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        raise GitHubError("Couldn't reach GitHub: timed out")
+        async for page in super().repo_open_issues_pages(repo):
+            yield page
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         raise GitHubError("Couldn't reach GitHub: timed out")
@@ -125,7 +136,7 @@ async def test_a_failed_refresh_keeps_the_loaded_issues_and_shows_the_error(tmp_
 
 
 class Flaky(FakeGitHub):
-    """A fake GitHub whose searches fail while `down`."""
+    """A fake GitHub whose reads fail while `down`."""
 
     down = True
 
@@ -133,6 +144,12 @@ class Flaky(FakeGitHub):
         if self.down:
             raise GitHubError("Couldn't reach GitHub: timed out")
         return await super().search_issues(query)
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        if self.down:
+            raise GitHubError("Couldn't reach GitHub: timed out")
+        async for page in super().repo_open_issues_pages(repo):
+            yield page
 
 
 async def snapshot(tmp_path, loaded_at: datetime) -> None:

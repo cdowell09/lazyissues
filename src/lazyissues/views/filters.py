@@ -48,7 +48,16 @@ class FilterResults(IssueList):
         mover: Mover,
         writer: Writer,
     ) -> None:
-        super().__init__(config, github, store, details, mover, writer, id=results_id(query))
+        super().__init__(
+            config,
+            github,
+            store,
+            details,
+            mover,
+            writer,
+            id=results_id(query),
+            repo_sync=None,
+        )
         self.saved_query = query  # GitHub search syntax, as the user wrote it
         if search.asks_for_closed(query):  # its closed issues are what the user asked for
             self.set_reactive(IssueList.state, ViewState(show_done=True))
