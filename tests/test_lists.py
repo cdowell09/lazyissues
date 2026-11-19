@@ -301,3 +301,16 @@ async def test_o_opens_and_y_copies_the_link_of_the_issue_under_the_cursor(monke
         await pilot.press("down", "o", "y")  # lanternfish#9
         url = "https://github.com/octo-dev/lanternfish/issues/9"
         assert (opened, copied) == ([url], [url])
+
+
+async def test_fixed_width_table_updates_virtual_size_and_measures_wide_unicode():
+    app = LazyIssuesApp(demo.config(), demo.github())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settled(pilot)
+        listed = table(app, "my-work")
+        assert listed.virtual_size.height == len(listed.rows) + listed.header_height
+        assert listed.virtual_size.width == sum(
+            c.get_render_width(listed) for c in listed.columns.values()
+        )
+        assert issue_list._cell_width(issue_list._plain_cell("日本語")) == 6
+        assert issue_list._cell_width(issue_list._plain_cell("ascii")) == 5

@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.segment import Segment
@@ -21,6 +22,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.coordinate import Coordinate
+from textual.geometry import Size
 from textual.keys import key_to_character
 from textual.reactive import var
 from textual.selection import Selection
@@ -28,6 +30,7 @@ from textual.strip import Strip
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
+from textual.widgets.data_table import RowKey
 
 from lazyissues import search
 from lazyissues.config import Config
@@ -58,7 +61,7 @@ if TYPE_CHECKING:
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels", "Updated")
 TITLE, MIN_TITLE = COLUMNS.index("Title"), 10  # the column that fills the width (`fit`)
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
-SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
+SEARCH_PAUSE = 0.05  # seconds after the last keystroke before a search filters
 AGE_TICK = 60  # seconds between redraws of the data's age; past a minute it counts minutes
 CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
 DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
@@ -91,6 +94,17 @@ def arrow(folded: bool | None) -> str:
 INDENT = arrow(None)
 
 
+@lru_cache(maxsize=4096)
+def _plain_cell(text: str) -> Text:
+    """Cached plain Text cell; DataTable reads cells without mutating them."""
+    return Text(text, overflow="ellipsis")
+
+
+def _cell_width(cell: Text) -> int:
+    plain = cell.plain
+    return len(plain) if plain.isascii() else cell.cell_len
+
+
 class IssueTable(DataTable):
     """The list's table, whose text a drag selects. (Textual's table has no selection.)
 
@@ -120,12 +134,21 @@ class IssueTable(DataTable):
 
         GitHub text is never markup, so string cells are shown as typed."""
         self.clear(columns=True)
-        cells = [[Text(cell) if isinstance(cell, str) else cell for cell in row] for _, row in rows]
-        for cell in (cell for row in cells for cell in row):
-            cell.overflow = "ellipsis"
-        issues = [row for (key, _), row in zip(rows, cells, strict=True) if key is not None]
+        cells: list[list[Text]] = []
+        issues: list[list[Text]] = []
+        for key, row in rows:
+            converted: list[Text] = []
+            for cell in row:
+                if isinstance(cell, str):
+                    converted.append(_plain_cell(cell))
+                else:
+                    cell.overflow = "ellipsis"
+                    converted.append(cell)
+            cells.append(converted)
+            if key is not None:
+                issues.append(converted)
         natural = [
-            max([len(label), *(row[at].cell_len for row in issues)])
+            max([len(label), *(_cell_width(row[at]) for row in issues)])
             for at, label in enumerate(COLUMNS)
         ]
         padding = 2 * self.cell_padding * len(COLUMNS)
@@ -134,6 +157,19 @@ class IssueTable(DataTable):
             self.add_column(label, width=width)
         for (key, _), row in zip(rows, cells, strict=True):
             self.add_row(*row, key=key)
+
+    def _update_dimensions(self, new_rows: Iterable[RowKey]) -> None:
+        # Textual's DataTable measures every cell of every new row on idle even when
+        # every column has a fixed width and every row is height 1 (textual<9).
+        if any(column.auto_width for column in self.columns.values()):
+            super()._update_dimensions(new_rows)
+            return
+        data_cells_width = sum(column.get_render_width(self) for column in self.columns.values())
+        header_height = self.header_height if self.show_header else 0
+        self.virtual_size = Size(
+            data_cells_width + self._row_label_column_width,
+            self._total_row_height + header_height,
+        )
 
     def _get_row_style(self, row_index: int, base_style: Style) -> Style:
         # Textual's private hook (as of 8.2, hence `textual<9`) for the style of a row
@@ -171,7 +207,6 @@ class IssueList(IssueActions, Widget):
     IssueList.-searching #search { display: block; }
     IssueList #filters { dock: bottom; color: $text-muted; }
     IssueList #refreshing { dock: bottom; color: $text-muted; display: none; }
-    IssueList.-refreshing #refreshing { display: block; }
     """
     BINDINGS = [
         *WRITE_BINDINGS,
@@ -277,7 +312,8 @@ class IssueList(IssueActions, Widget):
             self._stale = True
 
     def watch_refreshing(self, refreshing: bool) -> None:
-        self.set_class(refreshing, "-refreshing")
+        for indicator in self.query("#refreshing"):
+            indicator.display = refreshing
 
     def watch_state(self, old: ViewState, new: ViewState) -> None:
         if old.selected != new.selected and replace(old, selected=new.selected) == new:
