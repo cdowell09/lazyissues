@@ -6,7 +6,7 @@ import pytest
 from lazyissues import demo
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import CloseReason, Issue, IssueDetail, Milestone, Project
+from lazyissues.models import CloseReason, Issue, IssueDetail, IssuePage, Milestone, Project
 
 
 async def test_fake_understands_the_queries_the_app_sends():
@@ -353,3 +353,59 @@ async def test_fake_keeps_the_update_time_through_a_rejected_write():
     with pytest.raises(GitHubError):
         await github.assign("o/r", 1, "nobody")
     assert (await found(github, 1)).updated_at == LONG_AGO
+
+
+async def test_fake_search_issues_pages_chunks_by_page_size_and_delegates():
+    issues = [Issue("o/r", n, f"Issue {n}", f"u/{n}") for n in range(1, 6)]
+    github = FakeGitHub(viewer="me", issues=issues, page_size=2)
+
+    pages = [page async for page in github.search_issues_pages("is:open repo:o/r")]
+
+    assert [len(page.issues) for page in pages] == [2, 2, 1]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (5, True, "me"),
+        (5, True, None),
+        (5, False, None),
+    ]
+    assert github.searched == ["is:open repo:o/r"]
+
+    empty_pages = [page async for page in github.search_issues_pages("repo:o/none")]
+    assert empty_pages == [IssuePage((), total_count=0, has_next_page=False, viewer="me")]
+
+    class CustomFake(FakeGitHub):
+        async def search_issues(self, query: str) -> list[Issue]:
+            return [Issue("o/r", 99, "Intercepted", "u/99")]
+
+    intercepted = [page async for page in CustomFake(viewer="me").search_issues_pages("x")]
+    assert [i.number for page in intercepted for i in page.issues] == [99]
+
+
+async def test_fake_repo_open_issues_pages_filters_sorts_newest_first_and_records_synced():
+    github = FakeGitHub(
+        viewer="me",
+        issues=[
+            Issue("o/r", 1, "Older", "u/1", updated_at="2026-09-01T10:00:00Z"),
+            Issue("o/r", 2, "Closed seeded", "u/2", closed=True, updated_at="2026-09-05T10:00:00Z"),
+            Issue("o/r", 3, "Newest", "u/3", updated_at="2026-09-03T10:00:00Z"),
+            Issue("o/r", 4, "No stamp", "u/4", updated_at=None),
+            Issue("o/r", 5, "Closed later", "u/5", updated_at="2026-09-04T10:00:00Z"),
+            Issue("o/other", 6, "Other repo", "u/6", updated_at="2026-09-06T10:00:00Z"),
+        ],
+        page_size=2,
+    )
+    github.closed.add("o/r#5")
+
+    pages = [page async for page in github.repo_open_issues_pages("O/R")]
+
+    assert github.synced_repos == ["O/R"]
+    assert [[i.number for i in page.issues] for page in pages] == [[3, 1], [4]]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (3, True, "me"),
+        (3, False, None),
+    ]
+
+    empty = FakeGitHub(viewer="nobody")
+    assert [page async for page in empty.repo_open_issues_pages("o/missing")] == [
+        IssuePage((), total_count=0, has_next_page=False, viewer="nobody")
+    ]
+    assert empty.synced_repos == ["o/missing"]

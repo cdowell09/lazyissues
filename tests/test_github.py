@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from lazyissues.github import GitHubError, GraphQLGateway
-from lazyissues.models import Event, Issue, Milestone, Project, ProjectField
+from lazyissues.models import Event, Issue, IssuePage, Milestone, Project, ProjectField
 
 
 def node(number: int) -> dict:
@@ -653,3 +653,141 @@ async def test_gateway_lazy_token_error_surfaces_as_github_error():
     )
     with pytest.raises(GitHubError, match="gh auth login"):
         await github.search_issues("a")
+
+
+async def test_search_issues_pages_streams_pages_and_populates_whoami_from_page_one():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        after = body["variables"]["after"]
+        if after is None:
+            data = {
+                "viewer": {"login": "me"},
+                "search": {
+                    "issueCount": 2,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    "nodes": [node(1)],
+                },
+            }
+            return httpx.Response(200, json={"data": data}, headers={"X-OAuth-Scopes": "repo, org"})
+        data = {
+            "search": {
+                "issueCount": 2,
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [node(2)],
+            }
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    pages = [page async for page in github.search_issues_pages("is:open repo:o/r")]
+
+    assert [len(page.issues) for page in pages] == [1, 1]
+    assert [page.issues[0].number for page in pages] == [1, 2]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (2, True, "me"),
+        (2, False, None),
+    ]
+    assert "viewer { login }" in sent[0]["query"]
+    assert "viewer { login }" not in sent[1]["query"]
+
+    assert await github.whoami() == ("me", {"repo", "org"})
+    assert len(sent) == 2
+
+    pages_again = [page async for page in github.search_issues_pages("is:open repo:o/r")]
+    assert "viewer { login }" not in sent[2]["query"]
+    assert pages_again[0].viewer == "me"
+
+
+async def test_repo_open_issues_pages_streams_pages_caches_ids_and_viewer():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if body["query"].lstrip().startswith("mutation"):
+            return httpx.Response(200, json={"data": {"reopenIssue": {"clientMutationId": None}}})
+        after = body["variables"]["after"]
+        if after is None:
+            data = {
+                "viewer": {"login": "me"},
+                "repository": {
+                    "id": "R_1",
+                    "issues": {
+                        "totalCount": 2,
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        "nodes": [node(1)],
+                    },
+                },
+            }
+            return httpx.Response(200, json={"data": data}, headers={"X-OAuth-Scopes": "repo"})
+        data = {
+            "repository": {
+                "id": "R_1",
+                "issues": {
+                    "totalCount": 2,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [node(2)],
+                },
+            }
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    pages = [page async for page in github.repo_open_issues_pages("o/r")]
+
+    assert [page.issues[0].number for page in pages] == [1, 2]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (2, True, "me"),
+        (2, False, None),
+    ]
+    assert "states: [OPEN]" in sent[0]["query"]
+    assert "orderBy: {field: UPDATED_AT, direction: DESC}" in sent[0]["query"]
+    assert sent[0]["variables"] == {"owner": "o", "name": "r", "after": None}
+    assert sent[1]["variables"] == {"owner": "o", "name": "r", "after": "c1"}
+    assert "viewer { login }" in sent[0]["query"]
+    assert "viewer { login }" not in sent[1]["query"]
+
+    assert await github.whoami() == ("me", {"repo"})
+    assert len(sent) == 2
+
+    await github.reopen_issue("o/r", 1)
+    assert len(sent) == 3
+    assert mutation(sent[2]) == ("reopenIssue", {"issueId": "I_1"})
+
+
+async def test_repo_open_issues_pages_early_close_never_fetches_page_two():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        data = {
+            "viewer": {"login": "me"},
+            "repository": {
+                "id": "R_1",
+                "issues": {
+                    "totalCount": 301,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    "nodes": [node(1)],
+                },
+            },
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    stream = github.repo_open_issues_pages("o/r")
+    first = await anext(stream)
+    await stream.aclose()
+
+    assert isinstance(first, IssuePage)
+    assert first.total_count == 301
+    assert first.has_next_page is True
+    assert len(sent) == 1
+
+
+async def test_repo_open_issues_pages_raises_on_missing_repository():
+    handler, _ = answer({"repository": None})
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        _ = [page async for page in gateway(handler).repo_open_issues_pages("o/missing")]

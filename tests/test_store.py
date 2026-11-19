@@ -240,3 +240,43 @@ def test_a_snapshot_from_the_previous_version_is_ignored(tmp_path):
 
     store = IssueStore(path)
     assert (store.issues, store.loaded_at) == ([], None)
+
+
+def test_merge_page_upserts_without_pruning_saving_or_bumping_loaded_at(tmp_path):
+    path = tmp_path / "snapshot.json"
+    t0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    store = IssueStore(path)
+    store.replace([issue(1, "old1"), issue(2, "keep2")], requested_at=1.0, loaded_at=t0)
+
+    changed = store.merge_page([issue(1, "new1"), issue(3, "added3")], requested_at=2.0)
+
+    assert changed is True
+    assert store.issues == [issue(1, "new1"), issue(2, "keep2"), issue(3, "added3")]
+    assert store.loaded_at == t0
+    assert IssueStore(path).issues == [issue(1, "old1"), issue(2, "keep2")]
+
+    assert store.merge_page([issue(1, "new1")], requested_at=2.0) is False
+
+
+def test_merge_page_rejects_stale_requested_at():
+    store = IssueStore()
+    store.replace([issue(1, "newer")], requested_at=5.0, loaded_at=None)
+
+    assert store.merge_page([issue(1, "older"), issue(2, "stale")], requested_at=4.0) is False
+    assert store.issues == [issue(1, "newer")]
+
+
+def test_merge_page_preserves_write_and_confirmed_move_against_stale_page_two():
+    moves = MoveTracker()
+    store = IssueStore(moves=moves)
+    assert store.merge_page([issue(1, "p1")], requested_at=2.0) is True
+
+    # Write arrives before Page 2 loads issue #2; update returns False without inserting it.
+    assert store.update(issue(2, "Written", labels=("todo",)), written_at=5.0) is False
+    assert [i.number for i in store.issues] == [1]
+
+    moves.start(issue(2, "Written", labels=("todo",)), "doing")
+    moves.confirm("octo/repo#2", [AddLabel("doing"), RemoveLabels(("todo",))], at=6.0)
+
+    assert store.merge_page([issue(2, "Stale", labels=("todo",))], requested_at=2.0) is True
+    assert store.issues == [issue(1, "p1"), issue(2, "Written", labels=("doing",))]

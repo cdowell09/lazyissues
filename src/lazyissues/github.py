@@ -5,7 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -18,6 +18,7 @@ from lazyissues.models import (
     Issue,
     IssueChanges,
     IssueDetail,
+    IssuePage,
     Milestone,
     Project,
     ProjectField,
@@ -52,6 +53,10 @@ class RateLimited(GitHubError):
 
 class Gateway(Protocol):
     async def search_issues(self, query: str) -> list[Issue]: ...
+
+    def search_issues_pages(self, query: str) -> AsyncIterator[IssuePage]: ...
+
+    def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]: ...
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail: ...
 
@@ -168,8 +173,66 @@ _SEARCH = (
     """
 query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ...IssueFields }
+  }
+}
+"""
+    + _ISSUE_FIELDS
+)
+
+_SEARCH_WITH_VIEWER = (
+    """
+query($q: String!, $after: String) {
+  viewer { login }
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ...IssueFields }
+  }
+}
+"""
+    + _ISSUE_FIELDS
+)
+
+_REPO_OPEN_ISSUES = (
+    """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    id
+    issues(
+      first: 100
+      after: $after
+      states: [OPEN]
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
+    }
+  }
+}
+"""
+    + _ISSUE_FIELDS
+)
+
+_REPO_OPEN_ISSUES_WITH_VIEWER = (
+    """
+query($owner: String!, $name: String!, $after: String) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    id
+    issues(
+      first: 100
+      after: $after
+      states: [OPEN]
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
+    }
   }
 }
 """
@@ -524,11 +587,75 @@ class GraphQLGateway:
             after = page["pageInfo"]["endCursor"]
         return nodes
 
+    def _record_viewer(self, data: dict[str, Any], headers: httpx.Headers) -> str | None:
+        if self._viewer is None and (viewer := data.get("viewer")):
+            self._viewer = viewer["login"], _parse_scopes(headers)
+        return self._viewer[0] if self._viewer is not None else None
+
+    async def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]:
+        after: str | None = None
+        fetched = 0
+        first_page = True
+        while True:
+            gql = _SEARCH_WITH_VIEWER if first_page and self._viewer is None else _SEARCH
+            data, headers = await self._send(gql, read=True, q=query, after=after)
+            viewer = self._record_viewer(data, headers) if first_page else None
+            first_page = False
+            page = data["search"]
+            nodes = [node for node in page["nodes"] if node]
+            for node in nodes:  # remember the IDs, so a write needs no lookup
+                self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+            fetched += len(nodes)
+            page_info = page["pageInfo"]
+            has_next_page = bool(page_info["hasNextPage"])
+            yield IssuePage(
+                issues=tuple(_issue(node) for node in nodes),
+                total_count=page.get("issueCount"),
+                has_next_page=has_next_page,
+                viewer=viewer,
+            )
+            if not has_next_page or fetched >= SEARCH_LIMIT:
+                break
+            after = page_info.get("endCursor")
+
     async def search_issues(self, query: str) -> list[Issue]:
-        nodes = await self._nodes(_SEARCH, lambda d: d["search"], q=query)
-        for node in nodes:  # remember the IDs, so a write needs no lookup
-            self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
-        return [_issue(node) for node in nodes]
+        return [issue async for page in self.search_issues_pages(query) for issue in page.issues]
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+        owner, name = repo.split("/", 1)
+        after: str | None = None
+        fetched = 0
+        first_page = True
+        while True:
+            gql = (
+                _REPO_OPEN_ISSUES_WITH_VIEWER
+                if first_page and self._viewer is None
+                else _REPO_OPEN_ISSUES
+            )
+            data, headers = await self._send(gql, read=True, owner=owner, name=name, after=after)
+            viewer = self._record_viewer(data, headers) if first_page else None
+            first_page = False
+            repo_data = data["repository"]
+            if repo_data is None:
+                raise GitHubError(f"Could not resolve to a Repository with the name '{repo}'.")
+            if repo_id := repo_data.get("id"):
+                self._repo_ids[repo] = repo_id
+            issues_conn = repo_data["issues"]
+            nodes = [node for node in issues_conn["nodes"] if node]
+            for node in nodes:  # remember the IDs, so a write needs no lookup
+                self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
+            fetched += len(nodes)
+            page_info = issues_conn["pageInfo"]
+            has_next_page = bool(page_info["hasNextPage"])
+            yield IssuePage(
+                issues=tuple(_issue(node) for node in nodes),
+                total_count=issues_conn.get("totalCount"),
+                has_next_page=has_next_page,
+                viewer=viewer,
+            )
+            if not has_next_page or fetched >= SEARCH_LIMIT:
+                break
+            after = page_info.get("endCursor")
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
@@ -539,8 +666,7 @@ class GraphQLGateway:
         """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
         if self._viewer is None:
             data, headers = await self._send(_VIEWER, read=True)
-            scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
-            self._viewer = data["viewer"]["login"], scopes - {""}
+            self._viewer = data["viewer"]["login"], _parse_scopes(headers)
         return self._viewer
 
     async def repo_labels(self, repo: str) -> list[str]:
@@ -830,6 +956,10 @@ class GraphQLGateway:
                 raise GitHubError(f"Project {project} has no single-select Status field.")
             self._boards[project] = board
         return self._boards[project]
+
+
+def _parse_scopes(headers: httpx.Headers) -> set[str]:
+    return {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")} - {""}
 
 
 def _named(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

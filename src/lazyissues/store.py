@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,7 +59,7 @@ class IssueStore:
         self.loaded_at: datetime | None = None  # when GitHub answered the read, if one has
         self._load()
         self.requested_at = -math.inf  # when the read behind `issues` was requested
-        self._written: dict[str, float] = {}  # when each issue's latest write was sent
+        self._written: dict[str, tuple[Issue, float]] = {}  # latest confirmed write per key
         self._saving: asyncio.TimerHandle | None = None  # the pending save, if any
 
     async def refresh(self, read: Awaitable[list[Issue]]) -> None:
@@ -67,6 +67,28 @@ class IssueStore:
         requested_at = now()
         issues = await read
         self.replace(issues, requested_at, loaded_at=datetime.now(UTC))
+
+    def merge_page(self, issues: Sequence[Issue], requested_at: float) -> bool:
+        """Upsert one incoming page into `issues` without pruning unseen rows or saving.
+
+        A page from a read requested before the one already applied is ignored. Returns
+        whether `issues` changed.
+        """
+        if requested_at < self.requested_at:
+            return False
+        merged = list(self.issues)
+        positions = {item.key: index for index, item in enumerate(merged)}
+        for raw in issues:
+            settled = self._settle(raw, requested_at)
+            if (index := positions.get(settled.key)) is not None:
+                merged[index] = settled
+            else:
+                positions[settled.key] = len(merged)
+                merged.append(settled)
+        changed = merged != self.issues
+        self.issues = merged
+        self.requested_at = requested_at
+        return changed
 
     def replace(self, issues: list[Issue], requested_at: float, loaded_at: datetime | None) -> None:
         """Apply a read requested at `requested_at` (on `now`'s clock) and answered at
@@ -78,8 +100,7 @@ class IssueStore:
         """
         if requested_at < self.requested_at:
             return
-        loaded = {issue.key: issue for issue in self.issues}
-        self.issues = [self._settle(issue, requested_at, loaded) for issue in issues]
+        self.issues = [self._settle(issue, requested_at) for issue in issues]
         self.requested_at = requested_at
         self.loaded_at = loaded_at
         self._save()
@@ -91,20 +112,25 @@ class IssueStore:
     def update(self, issue: Issue, written_at: float) -> bool:
         """Replace the loaded copy of `issue` with the one GitHub confirmed for a write
         sent at `written_at` (on `now`'s clock); False when `issue` isn't loaded here."""
+        existing = self._written.get(issue.key)
+        if existing is None or written_at >= existing[1]:
+            self._written[issue.key] = (issue, written_at)
         if all(loaded.key != issue.key for loaded in self.issues):
             return False
-        self._written[issue.key] = written_at
-        self.issues = [issue if loaded.key == issue.key else loaded for loaded in self.issues]
+        applied = self._written[issue.key][0]
+        self.issues = [applied if loaded.key == issue.key else loaded for loaded in self.issues]
         self._save()
         return True
 
-    def _settle(self, issue: Issue, requested_at: float, loaded: dict[str, Issue]) -> Issue:
+    def _settle(self, issue: Issue, requested_at: float) -> Issue:
         """`issue` as read at `requested_at`, unless it was written since: then the written
         copy, with only the moves confirmed after the write applied to it."""
-        written = self._written.get(issue.key, -math.inf)
-        if written > requested_at and issue.key in loaded:
-            issue = loaded[issue.key]
-        return self.moves.settle(issue, max(requested_at, written))
+        recorded = self._written.get(issue.key)
+        if recorded is not None and recorded[1] > requested_at:
+            issue, effective_at = recorded
+        else:
+            effective_at = requested_at
+        return self.moves.settle(issue, effective_at)
 
     def _load(self) -> None:
         """Open the snapshot; a missing, corrupt or old-format one is discarded."""
