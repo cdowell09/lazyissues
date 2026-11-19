@@ -249,7 +249,8 @@ class IssueList(IssueActions, Widget):
         self.writer.changed.subscribe(self, self._on_written)
         self.set_interval(AGE_TICK, self._show_filters)
         if self.store.issues:
-            self.redraw()
+            # Inactive TabPanes still report display=True during mount; defer to on_show.
+            self._stale = True
 
     def on_show(self) -> None:
         if not self._loaded:  # the first refresh waits until the tab is shown

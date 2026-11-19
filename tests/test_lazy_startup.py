@@ -98,3 +98,25 @@ async def test_applying_a_config_to_a_hidden_tab_redraws_it_only_when_shown(monk
 
         await show_tab(pilot, "team")
         assert len(drawn) == 2  # the pending redraw, then the first refresh's result
+
+
+async def test_startup_draws_cached_snapshot_only_for_the_start_tab(tmp_path):
+    from lazyissues.store import IssueStore, snapshot_path
+    from lazyissues.views.issue_list import IssueTable
+
+    config = demo.config()
+    github = demo.github()
+    for view_id in ("my-work", "team", "milestones", "unassigned"):
+        store = IssueStore(snapshot_path(tmp_path, view_id, config.repo_names))
+        store.replace(github.issues, requested_at=0.0, loaded_at=None)
+        store.flush()
+
+    app = LazyIssuesApp(config, github, cache=tmp_path)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        assert len(app.query_one("#my-work IssueTable", IssueTable).rows) > 0
+        for hidden in ("#team", "#milestones", "#unassigned"):
+            assert len(app.query_one(f"{hidden} IssueTable", IssueTable).rows) == 0
+
+        await show_tab(pilot, "unassigned")
+        assert len(app.query_one("#unassigned IssueTable", IssueTable).rows) > 0
