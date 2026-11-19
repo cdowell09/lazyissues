@@ -604,3 +604,52 @@ async def test_a_fresh_milestone_read_refetches_for_current_counts():
     await github.repo_milestones("o/r")
     assert (await github.repo_milestones("o/r", fresh=True))[0].open == 2
     assert len(sent) == 2
+
+
+def test_gh_token_prefers_env_vars_before_calling_gh(monkeypatch):
+    from lazyissues.github import gh_token
+
+    monkeypatch.setattr("lazyissues.github.subprocess.run", lambda *a, **kw: pytest.fail("ran gh"))
+    monkeypatch.setenv("GH_TOKEN", "  from-gh-token  ")
+    monkeypatch.setenv("GITHUB_TOKEN", "from-github-token")
+    assert gh_token() == "from-gh-token"
+
+    monkeypatch.setenv("GH_TOKEN", "   ")
+    assert gh_token() == "from-github-token"
+
+
+async def test_gateway_resolves_token_lazily_once_across_concurrent_reads():
+    import asyncio
+
+    calls: list[int] = []
+
+    def loader() -> str:
+        calls.append(1)
+        return "lazy-secret"
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(
+            200,
+            json={"data": {"search": {"pageInfo": {"hasNextPage": False}, "nodes": []}}},
+        )
+
+    github = GraphQLGateway(transport=httpx.MockTransport(handler), token_loader=loader)
+    assert calls == []
+    await asyncio.gather(github.search_issues("a"), github.search_issues("b"))
+    assert len(calls) == 1
+    assert seen_auth == ["bearer lazy-secret", "bearer lazy-secret"]
+
+
+async def test_gateway_lazy_token_error_surfaces_as_github_error():
+    def missing() -> str:
+        raise GitHubError("`gh` isn't logged in. Run `gh auth login`.")
+
+    github = GraphQLGateway(
+        transport=httpx.MockTransport(lambda req: pytest.fail("sent request without token")),
+        token_loader=missing,
+    )
+    with pytest.raises(GitHubError, match="gh auth login"):
+        await github.search_issues("a")

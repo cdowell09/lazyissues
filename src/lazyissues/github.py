@@ -1,6 +1,7 @@
 """The GitHub gateway: the only code that talks to GitHub (ADR 0002)."""
 
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
@@ -123,8 +124,18 @@ class Gateway(Protocol):
         ...
 
 
+def _env_token() -> str | None:
+    """GitHub token from `GH_TOKEN` or `GITHUB_TOKEN`, when set and non-blank."""
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if token := os.environ.get(name, "").strip():
+            return token
+    return None
+
+
 def gh_token() -> str:
-    """The token of the logged-in `gh` CLI user."""
+    """The token from `GH_TOKEN`/`GITHUB_TOKEN` or the logged-in `gh` CLI user."""
+    if token := _env_token():
+        return token
     if shutil.which("gh") is None:
         raise GitHubError("The GitHub CLI (`gh`) isn't installed: https://cli.github.com/")
     result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
@@ -411,16 +422,24 @@ def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
 class GraphQLGateway:
     def __init__(
         self,
-        token: str,
+        token: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        *,
+        token_loader: Callable[[], str] = gh_token,
     ) -> None:
         self._sleep = sleep
+        self._token_loader = token_loader
+        self._token_lock = asyncio.Lock()
         if transport is None and "pytest" in sys.modules:
             raise RuntimeError("Tests must not reach GitHub; pass a fake transport.")
+        if token is None and token_loader is gh_token:
+            token = _env_token()
+        self._token = token
+        headers = {"Authorization": f"bearer {token}"} if token is not None else {}
         self._client = httpx.AsyncClient(
             transport=transport,
-            headers={"Authorization": f"bearer {token}"},
+            headers=headers,
             timeout=30,
         )
         # Per-session caches: IDs never change, and the rest only changes by our own writes.
@@ -454,9 +473,20 @@ class GraphQLGateway:
         await self._sleep(wait)
         return await self._post(query, variables)
 
+    async def _ensure_token(self) -> None:
+        if self._token is not None:
+            return
+        async with self._token_lock:
+            if self._token is not None:
+                return
+            token = await asyncio.to_thread(self._token_loader)
+            self._token = token
+            self._client.headers["Authorization"] = f"bearer {token}"
+
     async def _post(
         self, query: str, variables: dict[str, Any]
     ) -> tuple[dict[str, Any], httpx.Headers]:
+        await self._ensure_token()
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}

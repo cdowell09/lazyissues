@@ -53,7 +53,7 @@ def launch(monkeypatch, tmp_path):
     monkeypatch.setattr(__main__.config_module, "config_dir", lambda: tmp_path)
     monkeypatch.setattr(__main__, "gh_token", lambda: "token")
     monkeypatch.setattr(__main__, "cache_dir", lambda: tmp_path / "cache")
-    monkeypatch.setattr(__main__, "GraphQLGateway", lambda token: demo.github())
+    monkeypatch.setattr(__main__, "GraphQLGateway", lambda token=None: demo.github())
 
     def run_setup(self):
         started.append(("setup", self.path))
@@ -92,6 +92,23 @@ def test_the_app_saves_to_the_config_it_was_started_with(launch, monkeypatch, tm
     monkeypatch.setattr(LazyIssuesApp, "run", lambda self: launch.append(("app", self.config_path)))
     __main__.main()
     assert launch == [("app", path)]
+
+
+def test_configured_launch_defers_gh_token_until_after_tui_starts(launch, monkeypatch, tmp_path):
+    path = tmp_path / "config.toml"
+    __main__.config_module.save(demo.config(), path)
+    called: list[bool] = []
+    monkeypatch.setattr(__main__, "gh_token", lambda: called.append(True) or "token")
+    tokens_passed: list[str | None] = []
+    monkeypatch.setattr(
+        __main__,
+        "GraphQLGateway",
+        lambda token=None: tokens_passed.append(token) or demo.github(),
+    )
+    __main__.main()
+    assert called == []
+    assert tokens_passed == [None]
+    assert launch == [("app", demo.config())]
 
 
 def test_setup_flag_reruns_setup_from_the_current_config(launch, monkeypatch, tmp_path):

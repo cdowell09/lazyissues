@@ -25,13 +25,17 @@ def main() -> None:
         return
 
     path = config_module.config_dir() / "config.toml"
-    # Fail before the TUI takes over the terminal, so errors print normally.
+    # Fail before the TUI takes over the terminal, so config errors print normally.
     try:
         config = config_module.load(path) if path.exists() else None
-        token = gh_token()
-    except (ConfigError, GitHubError) as e:
+    except ConfigError as e:
         sys.exit(f"lazyissues: {e}")
+    token: str | None = None
     if config is None or args.setup:
+        try:
+            token = gh_token()
+        except GitHubError as e:
+            sys.exit(f"lazyissues: {e}")
         from lazyissues.setup import SetupApp
 
         # Each app runs its own event loop, so each gets its own gateway (and HTTP client).
