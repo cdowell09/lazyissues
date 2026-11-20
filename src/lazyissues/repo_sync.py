@@ -1,6 +1,7 @@
 """Shared per-repository open-issue sync, cached and single-flight across tabs."""
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from datetime import UTC, datetime
 from lazyissues import store
 from lazyissues.github import Gateway
 from lazyissues.models import Issue
+from lazyissues.move_tracker import MoveTracker
 
 REPO_SYNC_MAX_OPEN = 300
 REPO_SYNC_HARD_CAP = 400
@@ -89,10 +91,6 @@ class _InFlightRepo:
             queue.put_nowait(event)
 
 
-def _dedupe(issues: Sequence[Issue]) -> tuple[Issue, ...]:
-    return tuple({issue.key: issue for issue in issues}.values())
-
-
 def _apply_write(issues: tuple[Issue, ...], issue: Issue) -> tuple[Issue, ...]:
     if issue.closed:
         return tuple(item for item in issues if item.key != issue.key)
@@ -103,60 +101,82 @@ def _apply_write(issues: tuple[Issue, ...], issue: Issue) -> tuple[Issue, ...]:
 
 
 class RepoSync:
-    """Caches and streams open issues per repo for repos with at most `max_open` open issues.
+    """Caches and streams open issues per repo for repos with at most `REPO_SYNC_MAX_OPEN`
+    open issues.
 
-    Repos with more than `max_open` open issues stop after Page 1, are marked oversized, and
-    are reported in `RepoSyncUpdate.oversized_repos` so callers can fall back to search.
+    Repos with more than `REPO_SYNC_MAX_OPEN` open issues stop after Page 1, are marked
+    oversized, and are reported in `RepoSyncUpdate.oversized_repos` so callers can fall back
+    to search. Repos whose stream exceeds `REPO_SYNC_HARD_CAP` mid-sync also fall back.
     """
 
     def __init__(
         self,
         github: Gateway,
+        moves: MoveTracker | None = None,
         *,
-        max_open: int = REPO_SYNC_MAX_OPEN,
-        hard_cap: int = REPO_SYNC_HARD_CAP,
         now: Callable[[], float] = store.now,
     ) -> None:
         self._github = github
-        self._max_open = max_open
-        self._hard_cap = hard_cap
+        self._moves = moves or MoveTracker()
         self._now = now
         self._entries: dict[str, _RepoEntry] = {}
         self._in_flight: dict[str, _InFlightRepo] = {}
         self._writes: dict[str, tuple[Issue, float]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
 
+    def close(self) -> None:
+        """Cancel any in-flight repository sync tasks."""
+        for task in list(self._tasks):
+            task.cancel()
+
     def record_write(self, issue: Issue, written_at: float) -> None:
         """Overlay a confirmed write onto the repo's cached open issues, if not stale."""
         existing_write = self._writes.get(issue.key)
-        if existing_write is None or written_at >= existing_write[1]:
-            self._writes[issue.key] = (issue, written_at)
+        if existing_write is not None and written_at < existing_write[1]:
+            return
+        self._writes[issue.key] = (issue, written_at)
         repo_key = issue.repo.casefold()
         entry = self._entries.get(repo_key)
         if entry is None or entry.oversized or written_at < entry.requested_at:
             return
-        applied = self._writes[issue.key][0]
+        applied = self._moves.settle(issue, written_at)
         self._entries[repo_key] = replace(entry, issues=_apply_write(entry.issues, applied))
 
-    def invalidate(self, repo: str) -> None:
-        """Drop cached state for `repo` so the next sync fetches fresh data."""
-        repo_key = repo.casefold()
-        self._entries.pop(repo_key, None)
-        self._in_flight.pop(repo_key, None)
+    def apply_moves(self, confirmed: Sequence[tuple[Issue, float]] = ()) -> None:
+        """Re-settle cached open issues against confirmed moves, dropping closed ones
+        and inserting newly reopened ones."""
+        for repo_key, entry in list(self._entries.items()):
+            if entry.oversized:
+                continue
+            settled = tuple(
+                updated
+                for issue in entry.issues
+                if not (updated := self._settle_issue(issue, entry.requested_at)).closed
+            )
+            if settled != entry.issues:
+                self._entries[repo_key] = replace(entry, issues=settled)
+        for moved, confirmed_at in confirmed:
+            if moved.closed:
+                continue
+            repo_key = moved.repo.casefold()
+            entry = self._entries.get(repo_key)
+            if entry is None or entry.oversized or confirmed_at < entry.requested_at:
+                continue
+            if any(existing.key == moved.key for existing in entry.issues):
+                continue
+            reopened = self._settle_issue(moved, confirmed_at)
+            if not reopened.closed:
+                self._entries[repo_key] = replace(entry, issues=(*entry.issues, reopened))
 
     async def sync_repos(
         self, repos: Sequence[str], *, force: bool = False
     ) -> AsyncIterator[RepoSyncUpdate]:
         """Stream progressive updates and one final snapshot for `repos`."""
-        ordered_keys: list[str] = []
         requested_names: dict[str, str] = {}
         for repo in repos:
-            key = repo.casefold()
-            if key not in requested_names:
-                ordered_keys.append(key)
-                requested_names[key] = repo
+            requested_names.setdefault(repo.casefold(), repo)
 
-        if not ordered_keys:
+        if not requested_names:
             yield RepoSyncUpdate(
                 issues=(),
                 requested_at=self._now(),
@@ -167,88 +187,65 @@ class RepoSync:
 
         entries: dict[str, _RepoEntry] = {}
         pending: dict[str, _InFlightRepo] = {}
-        subscribed: list[_InFlightRepo] = []
         queue: asyncio.Queue[_RepoEvent] = asyncio.Queue()
         viewer: str | None = None
 
-        for key in ordered_keys:
+        for key, repo in requested_names.items():
             if not force and (cached := self._entries.get(key)) is not None:
                 entries[key] = cached
                 viewer = viewer or cached.viewer
             else:
-                in_flight = self._start_or_join(requested_names[key], key, force=force)
+                in_flight = self._start_or_join(repo, key, force=force)
                 pending[key] = in_flight
-                subscribed.append(in_flight)
                 in_flight.subscribe(queue)
 
         def current_requested_at() -> float:
             stamps = [e.requested_at for e in entries.values() if not e.oversized] + [
                 flight.requested_at for flight in pending.values()
             ]
-            if stamps:
-                return min(stamps)
-            return min(e.requested_at for e in entries.values())
+            return min(stamps) if stamps else min(e.requested_at for e in entries.values())
 
-        def current_oversized() -> frozenset[str]:
-            return frozenset(
-                requested_names[key]
-                for key in ordered_keys
-                if key in entries and entries[key].oversized
+        def partial(issues: tuple[Issue, ...]) -> RepoSyncUpdate:
+            return RepoSyncUpdate(
+                issues=issues,
+                requested_at=current_requested_at(),
+                loaded_at=None,
+                final=False,
+                viewer=viewer,
             )
 
         try:
             if pending and entries:
                 cached_issues = tuple(
                     issue
-                    for key in ordered_keys
+                    for key in requested_names
                     if key in entries and not entries[key].oversized
                     for issue in entries[key].issues
                 )
                 if cached_issues:
-                    yield RepoSyncUpdate(
-                        issues=cached_issues,
-                        requested_at=current_requested_at(),
-                        loaded_at=None,
-                        final=False,
-                        viewer=viewer,
-                        oversized_repos=current_oversized(),
-                    )
+                    yield partial(cached_issues)
 
             while pending:
                 event = await queue.get()
                 if isinstance(event, _PageEvent):
                     viewer = viewer or event.viewer
                     if event.issues:
-                        yield RepoSyncUpdate(
-                            issues=event.issues,
-                            requested_at=current_requested_at(),
-                            loaded_at=None,
-                            final=False,
-                            viewer=viewer,
-                            oversized_repos=current_oversized(),
-                        )
+                        yield partial(event.issues)
                 else:
-                    pending.pop(event.repo_key, None)
+                    if (done_flight := pending.pop(event.repo_key, None)) is not None:
+                        done_flight.unsubscribe(queue)
                     if event.error is not None:
                         raise event.error
                     assert event.entry is not None
                     entries[event.repo_key] = event.entry
                     viewer = viewer or event.entry.viewer
                     if pending and event.last_page and not event.entry.oversized:
-                        yield RepoSyncUpdate(
-                            issues=event.last_page,
-                            requested_at=current_requested_at(),
-                            loaded_at=None,
-                            final=False,
-                            viewer=viewer,
-                            oversized_repos=current_oversized(),
-                        )
+                        yield partial(event.last_page)
         finally:
-            for in_flight in subscribed:
+            for in_flight in pending.values():
                 in_flight.unsubscribe(queue)
 
-        final_entries: dict[str, _RepoEntry] = {}
-        for key in ordered_keys:
+        for key in requested_names:
             entry = entries[key]
             latest = self._entries.get(key)
             if (
@@ -256,28 +253,23 @@ class RepoSync:
                 and latest.requested_at >= entry.requested_at
                 and latest.oversized == entry.oversized
             ):
-                entry = latest
-            final_entries[key] = entry
+                entries[key] = latest
 
         all_issues = tuple(
             issue
-            for key in ordered_keys
-            if not final_entries[key].oversized
-            for issue in final_entries[key].issues
+            for key in requested_names
+            if not entries[key].oversized
+            for issue in entries[key].issues
         )
-        qualifying = [
-            final_entries[key] for key in ordered_keys if not final_entries[key].oversized
-        ]
-        source_entries = qualifying or list(final_entries.values())
-        loaded_at = min(entry.loaded_at for entry in source_entries)
-        requested_at = min(entry.requested_at for entry in source_entries)
+        qualifying = [entries[key] for key in requested_names if not entries[key].oversized]
+        source_entries = qualifying or list(entries.values())
         oversized = frozenset(
-            requested_names[key] for key in ordered_keys if final_entries[key].oversized
+            repo for key, repo in requested_names.items() if entries[key].oversized
         )
         yield RepoSyncUpdate(
             issues=all_issues,
-            requested_at=requested_at,
-            loaded_at=loaded_at,
+            requested_at=min(entry.requested_at for entry in source_entries),
+            loaded_at=min(entry.loaded_at for entry in source_entries),
             final=True,
             viewer=viewer,
             oversized_repos=oversized,
@@ -298,70 +290,80 @@ class RepoSync:
         if existing is None or entry.requested_at >= existing.requested_at:
             self._entries[repo_key] = entry
 
-    def _overlay_writes(
-        self, repo_key: str, issues: tuple[Issue, ...], requested_at: float
+    def _settle_issue(self, issue: Issue, requested_at: float) -> Issue:
+        recorded = self._writes.get(issue.key)
+        if recorded is not None and recorded[1] > requested_at:
+            issue, effective_at = recorded
+        else:
+            effective_at = requested_at
+        return self._moves.settle(issue, effective_at)
+
+    def _settle_repo_issues(
+        self, repo_key: str, issues: Sequence[Issue], requested_at: float
     ) -> tuple[Issue, ...]:
-        pending_writes = sorted(
-            (
-                (written_at, issue)
-                for issue, written_at in self._writes.values()
-                if issue.repo.casefold() == repo_key and written_at >= requested_at
-            ),
-            key=lambda pair: pair[0],
-        )
-        for _, issue in pending_writes:
-            issues = _apply_write(issues, issue)
-        return issues
+        by_key: dict[str, Issue] = {}
+        for raw in issues:
+            settled = self._settle_issue(raw, requested_at)
+            by_key[settled.key] = settled
+        for key, (written, written_at) in self._writes.items():
+            if (
+                key not in by_key
+                and written.repo.casefold() == repo_key
+                and written_at > requested_at
+            ):
+                by_key[key] = self._moves.settle(written, written_at)
+        return tuple(issue for issue in by_key.values() if not issue.closed)
 
     async def _run_repo(self, repo: str, repo_key: str, in_flight: _InFlightRepo) -> None:
-        pages: AsyncIterator[object] | None = None
         try:
-            page_stream = self._github.repo_open_issues_pages(repo)
-            pages = page_stream
-            first = await anext(page_stream, None)
-            if first is None:
-                entry = _RepoEntry(
-                    issues=(),
-                    requested_at=in_flight.requested_at,
-                    loaded_at=datetime.now(UTC),
-                    oversized=False,
-                )
-                self._commit(repo_key, entry)
-                in_flight.finish(entry, (), None)
-                return
+            collected: list[Issue] = []
+            last_page: tuple[Issue, ...] = ()
+            viewer: str | None = None
+            fetched = 0
+            first_page = True
+            async with contextlib.aclosing(
+                self._github.repo_open_issues_pages(repo)
+            ) as page_stream:
+                async for page in page_stream:
+                    if first_page:
+                        viewer = page.viewer
+                        if (page.total_count or 0) > REPO_SYNC_MAX_OPEN:
+                            entry = _RepoEntry(
+                                issues=(),
+                                requested_at=in_flight.requested_at,
+                                loaded_at=datetime.now(UTC),
+                                oversized=True,
+                                viewer=viewer,
+                            )
+                            self._commit(repo_key, entry)
+                            in_flight.finish(entry, (), None)
+                            return
+                    fetched += len(page.issues)
+                    if fetched > REPO_SYNC_HARD_CAP or (
+                        fetched == REPO_SYNC_HARD_CAP and page.has_next_page
+                    ):
+                        entry = _RepoEntry(
+                            issues=(),
+                            requested_at=in_flight.requested_at,
+                            loaded_at=datetime.now(UTC),
+                            oversized=True,
+                            viewer=viewer,
+                        )
+                        self._commit(repo_key, entry)
+                        in_flight.finish(entry, (), None)
+                        return
+                    settled_page = tuple(
+                        settled
+                        for raw in page.issues
+                        if not (settled := self._settle_issue(raw, in_flight.requested_at)).closed
+                    )
+                    collected.extend(settled_page)
+                    last_page = settled_page
+                    if page.has_next_page:
+                        in_flight.emit_page(settled_page, viewer if first_page else None)
+                    first_page = False
 
-            viewer = first.viewer
-            if (first.total_count or 0) > self._max_open:
-                entry = _RepoEntry(
-                    issues=(),
-                    requested_at=in_flight.requested_at,
-                    loaded_at=datetime.now(UTC),
-                    oversized=True,
-                    viewer=viewer,
-                )
-                self._commit(repo_key, entry)
-                in_flight.finish(entry, (), None)
-                return
-
-            collected: list[Issue] = list(first.issues[: self._hard_cap])
-            last_page = tuple(collected)
-            has_more = first.has_next_page and len(collected) < self._hard_cap
-            if has_more:
-                in_flight.emit_page(last_page, viewer)
-
-            while has_more:
-                page = await anext(page_stream, None)
-                if page is None:
-                    break
-                remaining = self._hard_cap - len(collected)
-                chunk = page.issues[:remaining]
-                collected.extend(chunk)
-                last_page = chunk
-                has_more = page.has_next_page and len(collected) < self._hard_cap
-                if has_more:
-                    in_flight.emit_page(chunk, None)
-
-            issues = self._overlay_writes(repo_key, _dedupe(collected), in_flight.requested_at)
+            issues = self._settle_repo_issues(repo_key, collected, in_flight.requested_at)
             entry = _RepoEntry(
                 issues=issues,
                 requested_at=in_flight.requested_at,
@@ -371,12 +373,10 @@ class RepoSync:
             )
             self._commit(repo_key, entry)
             in_flight.finish(entry, last_page, None)
-        except Exception as exc:
+        except BaseException as exc:
             in_flight.finish(None, (), exc)
+            if not isinstance(exc, Exception):
+                raise
         finally:
-            if pages is not None:
-                aclose = getattr(pages, "aclose", None)
-                if aclose is not None:
-                    await aclose()
             if self._in_flight.get(repo_key) is in_flight:
                 del self._in_flight[repo_key]

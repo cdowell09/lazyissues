@@ -312,5 +312,8 @@ async def test_fixed_width_table_updates_virtual_size_and_measures_wide_unicode(
         assert listed.virtual_size.width == sum(
             c.get_render_width(listed) for c in listed.columns.values()
         )
-        assert issue_list._cell_width(issue_list._plain_cell("日本語")) == 6
-        assert issue_list._cell_width(issue_list._plain_cell("ascii")) == 5
+        from rich.text import Text
+
+        assert issue_list._cell_width(Text("日本語")) == 6
+        assert issue_list._cell_width(Text("ascii")) == 5
+        assert issue_list._cell_width(Text("a\tb")) == Text("a\tb").cell_len

@@ -13,7 +13,6 @@ from lazyissues.views.issue_list import IssueList
 class Milestones(IssueList):
     LABEL = "Milestones"
     EMPTY = "No open milestones in the repo set."
-    USE_REPO_SYNC = True
     found: list[Milestone] | None = None  # looked up on each refresh
 
     @property
@@ -33,8 +32,9 @@ class Milestones(IssueList):
 
     async def prepare_sync(self, *, force: bool) -> None:
         repos = self.config.repo_names
+        fresh = force or self.found is None
         found = await asyncio.gather(
-            *(self.github.repo_milestones(repo, fresh=True) for repo in repos)
+            *(self.github.repo_milestones(repo, fresh=fresh) for repo in repos)
         )
         self.found = [milestone for milestones in found for milestone in milestones]
 

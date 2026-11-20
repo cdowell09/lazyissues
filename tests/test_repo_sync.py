@@ -1,12 +1,14 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
 import pytest
 
 from lazyissues.fake import FakeGitHub
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssuePage
+from lazyissues.models import CloseReason, Issue, IssuePage
+from lazyissues.move_planner import AddLabel, Close, RemoveLabels, Reopen
+from lazyissues.move_tracker import MoveTracker
 from lazyissues.repo_sync import REPO_SYNC_HARD_CAP, REPO_SYNC_MAX_OPEN, RepoSync, RepoSyncUpdate
 
 
@@ -27,7 +29,7 @@ def make_issues(repo: str, count: int) -> list[Issue]:
 class CountingFakeGitHub(FakeGitHub):
     pages_fetched: dict[str, int] = field(default_factory=dict)
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         async for page in super().repo_open_issues_pages(repo):
             self.pages_fetched[repo] = self.pages_fetched.get(repo, 0) + 1
             yield page
@@ -74,14 +76,14 @@ async def test_exact_boundary_301_open_stops_after_page_one_and_marks_oversized(
     assert cached_updates[-1].oversized_repos == frozenset({"o/r"})
 
 
-async def test_hard_cap_stops_at_400_issues_when_stream_grows_mid_sync():
+async def test_hard_cap_400_issues_without_next_page_stays_synced():
     pages_pulled = 0
 
-    class GrowingFakeGitHub(FakeGitHub):
-        async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    class Exact400GitHub(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
             nonlocal pages_pulled
             self.synced_repos.append(repo)
-            all_issues = make_issues(repo, REPO_SYNC_HARD_CAP + 50)
+            all_issues = make_issues(repo, REPO_SYNC_HARD_CAP)
             for start in range(0, len(all_issues), 100):
                 pages_pulled += 1
                 chunk = tuple(all_issues[start : start + 100])
@@ -92,11 +94,68 @@ async def test_hard_cap_stops_at_400_issues_when_stream_grows_mid_sync():
                     viewer=self.viewer if start == 0 else None,
                 )
 
-    sync = RepoSync(GrowingFakeGitHub(viewer="me"))
+    sync = RepoSync(Exact400GitHub(viewer="me"))
     updates = await collect(sync, ["o/r"])
 
     assert pages_pulled == 4
-    assert len(updates[-1].issues) == REPO_SYNC_HARD_CAP
+    final = updates[-1]
+    assert final.oversized_repos == frozenset()
+    assert [issue.number for issue in final.issues] == list(range(1, REPO_SYNC_HARD_CAP + 1))
+
+
+async def test_hard_cap_400_with_has_next_page_marks_oversized_without_fetching_page_5():
+    pages_pulled = 0
+
+    class Growing401GitHub(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+            nonlocal pages_pulled
+            self.synced_repos.append(repo)
+            all_issues = make_issues(repo, REPO_SYNC_HARD_CAP + 1)
+            for start in range(0, len(all_issues), 100):
+                pages_pulled += 1
+                chunk = tuple(all_issues[start : start + 100])
+                yield IssuePage(
+                    issues=chunk,
+                    total_count=REPO_SYNC_MAX_OPEN,
+                    has_next_page=start + 100 < len(all_issues),
+                    viewer=self.viewer if start == 0 else None,
+                )
+
+    sync = RepoSync(Growing401GitHub(viewer="me"))
+    updates = await collect(sync, ["o/r"])
+
+    assert pages_pulled == 4
+    final = updates[-1]
+    assert final.final is True
+    assert final.oversized_repos == frozenset({"o/r"})
+    assert final.issues == ()
+
+
+async def test_hard_cap_mid_page_crossing_marks_oversized():
+    class MidPageCrossingGitHub(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+            self.synced_repos.append(repo)
+            all_issues = make_issues(repo, 450)
+            yield IssuePage(
+                issues=tuple(all_issues[:350]),
+                total_count=REPO_SYNC_MAX_OPEN,
+                has_next_page=True,
+                viewer=self.viewer,
+            )
+            yield IssuePage(
+                issues=tuple(all_issues[350:]),
+                total_count=REPO_SYNC_MAX_OPEN,
+                has_next_page=False,
+                viewer=None,
+            )
+
+    sync = RepoSync(MidPageCrossingGitHub(viewer="me"))
+    updates = await collect(sync, ["o/r"])
+
+    final = updates[-1]
+    assert final.final is True
+    assert final.oversized_repos == frozenset({"o/r"})
+    assert final.issues == ()
 
 
 async def test_mixed_multi_repo_returns_qualifying_issues_and_oversized_with_zero_extra_calls():
@@ -126,7 +185,7 @@ async def test_single_flight_coalesces_concurrent_callers_with_progressive_updat
     release_page2 = asyncio.Event()
 
     class GatedFakeGitHub(FakeGitHub):
-        async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
             first = True
             async for page in super().repo_open_issues_pages(repo):
                 yield page
@@ -171,7 +230,7 @@ async def test_mid_stream_error_does_not_cache_partial_entry():
     class FlakyFakeGitHub(FakeGitHub):
         fail_page_two: bool = True
 
-        async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
             seen = 0
             async for page in super().repo_open_issues_pages(repo):
                 seen += 1
@@ -196,6 +255,28 @@ async def test_mid_stream_error_does_not_cache_partial_entry():
     assert len(github.synced_repos) == 2
     assert recovered[-1].final is True
     assert {issue.number for issue in recovered[-1].issues} == {1, 2, 3, 4}
+
+
+async def test_cancelled_repo_task_does_not_deadlock_subscribers():
+    page1_sent = asyncio.Event()
+    never = asyncio.Event()
+
+    class HangingGitHub(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+            async for page in super().repo_open_issues_pages(repo):
+                yield page
+                page1_sent.set()
+                await never.wait()
+
+    github = HangingGitHub(viewer="me", issues=make_issues("o/r", 4), page_size=2)
+    sync = RepoSync(github)
+
+    subscriber = asyncio.create_task(collect(sync, ["o/r"]))
+    await page1_sent.wait()
+    sync.close()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(subscriber, timeout=1.0)
 
 
 async def test_record_write_updates_cached_open_drops_closed_and_force_refetches():
@@ -230,13 +311,53 @@ async def test_record_write_updates_cached_open_drops_closed_and_force_refetches
     ]
 
 
-async def test_invalidate_forces_refetch_on_next_sync():
-    github = FakeGitHub(viewer="me", issues=make_issues("o/r", 2))
-    sync = RepoSync(github)
+async def test_apply_moves_preserves_writes_ignores_rejections_drops_closed_and_adds_reopened():
+    clock = [10.0]
+    issue1 = Issue("o/r", 1, "Issue 1", "https://github.com/o/r/issues/1", labels=("todo",))
+    issue2 = Issue("o/r", 2, "Issue 2", "https://github.com/o/r/issues/2", labels=("todo",))
+    issue3 = Issue(
+        "o/r", 3, "Issue 3", "https://github.com/o/r/issues/3", labels=("todo",), closed=True
+    )
+    github = FakeGitHub(viewer="me", issues=[issue1, issue2, issue3])
+    moves = MoveTracker()
+    sync = RepoSync(github, moves, now=lambda: clock[0])
 
-    await collect(sync, ["o/r"])
-    assert len(github.synced_repos) == 1
+    initial = await collect(sync, ["o/r"])
+    assert [i.number for i in initial[-1].issues] == [1, 2]
 
-    sync.invalidate("o/r")
-    await collect(sync, ["o/r"])
-    assert len(github.synced_repos) == 2
+    # Rejected move must not change cached issues.
+    moves.start(issue1, "doing")
+    moves.reject(issue1.key, "forbidden")
+    sync.apply_moves()
+    cached = await collect(sync, ["o/r"])
+    assert cached[-1].issues[0].labels == ("todo",)
+
+    # Concurrent Writer edit (t=11) + confirmed move (t=12) keeps both title and new status.
+    edited1 = Issue("o/r", 1, "Edited 1", "https://github.com/o/r/issues/1", labels=("todo",))
+    sync.record_write(edited1, written_at=11.0)
+    moves.start(issue1, "doing")
+    plan1 = [AddLabel("doing"), RemoveLabels(("todo",))]
+    moves.confirm(issue1.key, plan1, at=12.0)
+    moved1 = Issue("o/r", 1, "Issue 1", "https://github.com/o/r/issues/1", labels=("doing",))
+    sync.apply_moves([(moved1, 12.0)])
+    cached = await collect(sync, ["o/r"])
+    assert [(i.number, i.title, i.labels) for i in cached[-1].issues] == [
+        (1, "Edited 1", ("doing",)),
+        (2, "Issue 2", ("todo",)),
+    ]
+
+    # Confirmed close removes issue #2 from cached open issues.
+    moves.start(issue2, "Close as completed")
+    moves.confirm(issue2.key, [Close(CloseReason.COMPLETED)], at=13.0)
+    closed2 = Issue("o/r", 2, "Issue 2", "https://github.com/o/r/issues/2", closed=True)
+    sync.apply_moves([(closed2, 13.0)])
+    cached = await collect(sync, ["o/r"])
+    assert [i.number for i in cached[-1].issues] == [1]
+
+    # Confirmed reopen inserts issue #3 into cached open issues.
+    moves.start(issue3, "Reopen")
+    moves.confirm(issue3.key, [Reopen()], at=14.0)
+    reopened3 = Issue("o/r", 3, "Issue 3", "https://github.com/o/r/issues/3", labels=("todo",))
+    sync.apply_moves([(reopened3, 14.0)])
+    cached = await collect(sync, ["o/r"])
+    assert [i.number for i in cached[-1].issues] == [1, 3]

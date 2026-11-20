@@ -16,15 +16,17 @@ from textual.widgets import DataTable, Footer, Header, TabbedContent, TabPane
 from lazyissues import clipboard
 from lazyissues import config as config_module
 from lazyissues.config import Config, ConfigError, SavedFilter
+from lazyissues.confirm import Confirm
 from lazyissues.github import Gateway
-from lazyissues.keys import tab_bindings
-from lazyissues.models import Issue, IssueDetail
+from lazyissues.keys import KeysScreen, tab_bindings
+from lazyissues.models import IssueDetail
 from lazyissues.move_tracker import MoveTracker
 from lazyissues.mover import Mover, RejectedMoveBanner
 from lazyissues.repo_sync import RepoSync
 from lazyissues.statuses import StatusRules
-from lazyissues.store import IssueStore, now, snapshot_path
+from lazyissues.store import IssueStore, snapshot_path
 from lazyissues.views.filters import (
+    FilterForm,
     FilterResults,
     Filters,
     results_id,
@@ -86,7 +88,7 @@ class LazyIssuesApp(App[None]):
         self.config_path = config_path
         self.details: dict[str, IssueDetail] = {}  # by issue key; every view's detail cache
         self.moves = MoveTracker()  # every view's store shares it
-        self.repo_sync = RepoSync(github)
+        self.repo_sync = RepoSync(github, self.moves)
         self.mover = Mover(self, github, StatusRules(config), self.moves, self.details)
         self.writer = Writer(self, github, config, self.moves, self.mover, self.details)
         self.tab_titles: list[str] = []  # set by compose
@@ -209,14 +211,11 @@ class LazyIssuesApp(App[None]):
 
     def action_keys(self) -> None:
         from lazyissues.bulk_actions import BulkConfirm, BulkMenu, BulkSummary
-        from lazyissues.confirm import Confirm
         from lazyissues.detail import IssueDetailScreen
         from lazyissues.forms.form import FORM_KEYS
-        from lazyissues.keys import KeysScreen
         from lazyissues.move_picker import MovePicker
         from lazyissues.preferences import PreferencesScreen
         from lazyissues.status_list import StatusList
-        from lazyissues.views.filters import FilterForm
 
         shortcuts = [
             Binding(key, "", f"Move to {status} (uppercase: at once)")
@@ -264,28 +263,24 @@ class LazyIssuesApp(App[None]):
     def on_mount(self) -> None:
         self.theme = self.config.preferences.theme
         self.writer.changed.subscribe(self, self._on_written, immediate=True)
-        self.mover.changed.subscribe(self, self._on_moved, immediate=True)
+        self.mover.confirmed.subscribe(self, self.repo_sync.apply_moves, immediate=True)
         self.focus_list()  # so arrows and Enter work at once
+
+    def on_unmount(self) -> None:
+        self.repo_sync.close()
 
     def _on_written(self, writes: Sequence[Written]) -> None:
         for written in writes:
             self.repo_sync.record_write(written.detail.issue, written.sent_at)
 
-    def _on_moved(self, moved: Sequence[Issue]) -> None:
-        rejected_keys = {r.issue.key for r in self.moves.rejected}
-        for issue in moved:
-            if not self.moves.pending(issue.key) and issue.key not in rejected_keys:
-                self.repo_sync.record_write(issue, now())
-
     def _on_first_tab_loaded(self) -> None:
         if not self._preloaded:
             self._preloaded = True
-            self.run_worker(self._preload_tabs(), exclusive=True)
+            self.run_worker(self._preload_tabs(), group="preload", exclusive=True)
 
     async def _preload_tabs(self) -> None:
         for view in self._builtin_tabs:
-            if not view._loaded:
-                await view.preload()
+            await view.preload()
 
     def action_show_tab(self, index: int) -> None:
         self.query_one(TabbedContent).active = f"tab-{index}"

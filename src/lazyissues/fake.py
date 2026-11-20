@@ -1,7 +1,7 @@
 """An in-memory GitHub, used by the test suite and by `--demo`."""
 
 import shlex
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -58,12 +58,12 @@ class FakeGitHub:
             raise GitHubError(f"Invalid search query: {e}") from None
         return [self._current(issue) for issue in self.issues if self._matches(issue, terms)]
 
-    async def search_issues_pages(self, query: str) -> AsyncIterator[IssuePage]:
+    async def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]:
         issues = await self.search_issues(query)
         for page in self._pages(issues):
             yield page
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         self.synced_repos.append(repo)
         open_issues = sorted(
             (

@@ -10,7 +10,7 @@ from lazyissues.views.issue_list import IssueList
 class Team(IssueList):
     LABEL = "Team"
     EMPTY = "Add GitHub logins to `team` in config.toml."
-    USE_REPO_SYNC = True
+    NEEDS_VIEWER = True
     viewer: str | None = None
 
     @property
@@ -20,16 +20,11 @@ class Team(IssueList):
             return list(roster)
         return [*roster, self.viewer]
 
-    def _needs_viewer(self) -> bool:
-        return True
-
     def record_viewer(self, viewer: str | None) -> None:
         if viewer:
             self.viewer = viewer
 
     def derive_open(self, issues: Sequence[Issue], viewer: str | None) -> list[Issue]:
-        if viewer:
-            self.viewer = viewer
         members_cf = {member.casefold() for member in self.members}
         return [
             issue

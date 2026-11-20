@@ -791,3 +791,74 @@ async def test_repo_open_issues_pages_raises_on_missing_repository():
     handler, _ = answer({"repository": None})
     with pytest.raises(GitHubError, match="Could not resolve"):
         _ = [page async for page in gateway(handler).repo_open_issues_pages("o/missing")]
+
+
+async def test_search_issues_pages_exact_search_limit_boundary(monkeypatch):
+    monkeypatch.setattr("lazyissues.github.SEARCH_LIMIT", 3)
+
+    # Exact 3 issues across two pages: keeps all 3 and reports has_next_page=False on final page.
+    def exact_handler(request: httpx.Request) -> httpx.Response:
+        after = json.loads(request.content)["variables"]["after"]
+        if after is None:
+            page = {
+                "issueCount": 3,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                "nodes": [node(1), node(2)],
+            }
+        else:
+            page = {
+                "issueCount": 3,
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [node(3)],
+            }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    pages = [p async for p in gateway(exact_handler).search_issues_pages("is:open")]
+    assert [issue.number for p in pages for issue in p.issues] == [1, 2, 3]
+    assert [p.has_next_page for p in pages] == [True, False]
+
+    # 4 issues across pages: truncates final page to exact [1, 2, 3] and never fetches Page 3.
+    calls = 0
+
+    def over_limit_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        after = json.loads(request.content)["variables"]["after"]
+        if after is None:
+            page = {
+                "issueCount": 4,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                "nodes": [node(1), node(2)],
+            }
+        else:
+            page = {
+                "issueCount": 4,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c2"},
+                "nodes": [node(3), node(4)],
+            }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    truncated = [p async for p in gateway(over_limit_handler).search_issues_pages("is:open")]
+    assert calls == 2
+    assert [issue.number for p in truncated for issue in p.issues] == [1, 2, 3]
+    assert [p.has_next_page for p in truncated] == [True, False]
+
+
+async def test_issue_pages_stops_when_end_cursor_is_none():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        page = {
+            "issueCount": 2,
+            "pageInfo": {"hasNextPage": True, "endCursor": None},
+            "nodes": [node(1)],
+        }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    pages = [p async for p in gateway(handler).search_issues_pages("is:open")]
+    assert calls == 1
+    assert len(pages) == 1
+    assert [issue.number for issue in pages[0].issues] == [1]
+    assert pages[0].has_next_page is False

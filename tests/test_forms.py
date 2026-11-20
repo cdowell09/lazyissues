@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import replace
 
 from listed import show_tab
@@ -119,7 +119,7 @@ class Recording(FakeGitHub):
         self.searches.append(query)
         return await super().search_issues(query)
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         self.syncs.append(repo)
         async for page in super().repo_open_issues_pages(repo):
             yield page

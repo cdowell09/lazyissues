@@ -1,5 +1,6 @@
 """Building the GitHub issue searches a view sends: scoped to the repo set, with states."""
 
+from collections.abc import Collection
 from datetime import date
 
 _SCOPE_QUALIFIERS = ("repo:", "org:", "user:")
@@ -23,6 +24,21 @@ def with_states(query: str, closed_since: date | None) -> list[str]:
     if closed_since is not None:
         searches.append(f"{query} is:closed closed:>={closed_since.isoformat()}")
     return searches
+
+
+def closed_only(query: str, closed_since: date) -> list[str]:
+    """The closed-issue search for `query` since `closed_since`, or none if `query` asks only
+    for open issues."""
+    if _names(query, _STATE_QUALIFIERS):
+        return [query] if asks_for_closed(query) else []
+    return [f"{query} is:closed closed:>={closed_since.isoformat()}"]
+
+
+def targets_only_repos(query: str, repos: Collection[str]) -> bool:
+    """Whether `query` names `repo:` qualifiers and every one is in `repos`."""
+    allowed = {repo.casefold() for repo in repos}
+    named = [term[5:].casefold() for term in query.split() if term.startswith("repo:")]
+    return bool(named) and all(repo in allowed for repo in named)
 
 
 def asks_for_closed(query: str) -> bool:

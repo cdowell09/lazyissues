@@ -8,12 +8,9 @@ owns the tab's issue store and view state, and draws whatever
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.segment import Segment
@@ -33,14 +30,13 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 from textual.widgets.data_table import RowKey
 
-from lazyissues import search
-from lazyissues import store as store_module
+from lazyissues import tab_loader
 from lazyissues.config import Config
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.keys import tab_bindings
-from lazyissues.models import Issue, IssueDetail, IssuePage
+from lazyissues.models import Issue, IssueDetail
 from lazyissues.mover import Mover
-from lazyissues.repo_sync import RepoSync, RepoSyncUpdate
+from lazyissues.repo_sync import RepoSync
 from lazyissues.statuses import DONE, StatusRules
 from lazyissues.store import IssueStore
 from lazyissues.view_model import (
@@ -97,15 +93,9 @@ def arrow(folded: bool | None) -> str:
 INDENT = arrow(None)
 
 
-@lru_cache(maxsize=4096)
-def _plain_cell(text: str) -> Text:
-    """Cached plain Text cell; DataTable reads cells without mutating them."""
-    return Text(text, overflow="ellipsis")
-
-
 def _cell_width(cell: Text) -> int:
     plain = cell.plain
-    return len(plain) if plain.isascii() else cell.cell_len
+    return len(plain) if plain.isascii() and plain.isprintable() else cell.cell_len
 
 
 class IssueTable(DataTable):
@@ -143,7 +133,7 @@ class IssueTable(DataTable):
             converted: list[Text] = []
             for cell in row:
                 if isinstance(cell, str):
-                    converted.append(_plain_cell(cell))
+                    converted.append(Text(cell, overflow="ellipsis"))
                 else:
                     cell.overflow = "ellipsis"
                     converted.append(cell)
@@ -164,8 +154,17 @@ class IssueTable(DataTable):
     def _update_dimensions(self, new_rows: Iterable[RowKey]) -> None:
         # Textual's DataTable measures every cell of every new row on idle even when
         # every column has a fixed width and every row is height 1 (textual<9).
-        if any(column.auto_width for column in self.columns.values()):
-            super()._update_dimensions(new_rows)
+        row_keys = list(new_rows)
+        if (
+            self._labelled_row_exists
+            or any(column.auto_width for column in self.columns.values())
+            or any(
+                (row := self.rows.get(key)) is not None
+                and (row.auto_height or row.label is not None)
+                for key in row_keys
+            )
+        ):
+            super()._update_dimensions(row_keys)
             return
         data_cells_width = sum(column.get_render_width(self) for column in self.columns.values())
         header_height = self.header_height if self.show_header else 0
@@ -232,7 +231,7 @@ class IssueList(IssueActions, Widget):
     LABEL: ClassVar[str]  # the tab's title
     QUERY: ClassVar[str]  # GitHub search for the tab; states are added unless it names one
     EMPTY: ClassVar[str]  # shown when the tab has no issues at all
-    USE_REPO_SYNC: ClassVar[bool] = False
+    NEEDS_VIEWER: ClassVar[bool] = False
 
     refreshing = var(False)
     state = var(ViewState(), init=False)
@@ -260,6 +259,7 @@ class IssueList(IssueActions, Widget):
         self.repo_sync = repo_sync
         self._on_first_load = on_first_load
         self._loaded = False  # the first refresh has started
+        self._silent = False  # background preload: suppress error toasts while hidden
         self._read_again = False  # a reload was asked for during a refresh
         self._force_again = False  # any queued reload asked for a forced fetch
         self._search_timer: Timer | None = None  # filters once typing pauses
@@ -293,9 +293,6 @@ class IssueList(IssueActions, Widget):
         """Accept the viewer login piggybacked on a page response."""
         return None
 
-    def _needs_viewer(self) -> bool:
-        return False
-
     def grouping(self) -> Grouping:
         return by_status(self.rules)
 
@@ -315,6 +312,7 @@ class IssueList(IssueActions, Widget):
             self._stale = True
 
     def on_show(self) -> None:
+        self._silent = False
         if not self._loaded:  # the first refresh waits until the tab is shown
             self._loaded = True
             self.reload(force=False)
@@ -336,6 +334,8 @@ class IssueList(IssueActions, Widget):
             self._stale = True
 
     def watch_refreshing(self, refreshing: bool) -> None:
+        # Set display on the indicator directly instead of toggling a CSS class on
+        # IssueList, which triggers a full style-recalculation across child table cells.
         for indicator in self.query("#refreshing"):
             indicator.display = refreshing
 
@@ -364,6 +364,7 @@ class IssueList(IssueActions, Widget):
         A tab not yet shown only waits for its first show, which refreshes it."""
         if not self._loaded:
             return
+        self._silent = False
         if self.refreshing:
             self._read_again = True
             self._force_again = self._force_again or force
@@ -376,20 +377,23 @@ class IssueList(IssueActions, Widget):
         if self._loaded:
             return
         self._loaded = True
+        self._silent = True
         self.refreshing = True
-        await self._load(force=False, silent=True)
+        await self._load(force=False)
 
-    async def _load(self, *, force: bool = True, silent: bool = False) -> None:
+    async def _load(self, *, force: bool = True) -> None:
         try:
             next_force = force
             while True:
                 with_done, config = self.state.show_done, self.config
                 self._read_again = False
                 self._force_again = False
-                if self.USE_REPO_SYNC and self.repo_sync is not None:
-                    await self._load_with_repo_sync(config, with_done, force=next_force)
+                if self.repo_sync is not None:
+                    await tab_loader.load_with_repo_sync(
+                        self, self.repo_sync, config, with_done, force=next_force
+                    )
                 else:
-                    await self._load_with_search(config, with_done)
+                    await tab_loader.load_with_search(self, config, with_done)
                 if (
                     (with_done or not self.state.show_done)
                     and config is self.config
@@ -399,177 +403,20 @@ class IssueList(IssueActions, Widget):
                     # asked for mid-read; read again
                 next_force = self._force_again
         except GitHubError as e:
+            self.store.rollback_pages()
             self.error = f"Couldn't refresh: {e}"
-            if not silent:
+            if not self._silent:
                 title = f"Couldn't refresh {self.LABEL}"
                 self.notify(str(e), title=title, severity="error", timeout=10)
+            elif not all(widget.display for widget in self.ancestors_with_self):
+                self._loaded = False
         else:
             self.error = None
         finally:
             self.refreshing = False
         self.redraw()
         if self.error is None and self._on_first_load is not None:
-            callback = self._on_first_load
-            self._on_first_load = None
-            callback()
-
-    async def _load_with_repo_sync(self, config: Config, with_done: bool, *, force: bool) -> None:
-        assert self.repo_sync is not None
-        prep_task = asyncio.create_task(self.prepare_sync(force=force))
-        viewer: str | None = None
-        final_update: RepoSyncUpdate | None = None
-        had_progressive = False
-        try:
-            async for update in self.repo_sync.sync_repos(config.repo_names, force=force):
-                if update.viewer:
-                    viewer = update.viewer
-                    self.record_viewer(viewer)
-                if not update.final:
-                    if (
-                        prep_task.done()
-                        and not prep_task.cancelled()
-                        and prep_task.exception() is None
-                        and (viewer is not None or not self._needs_viewer())
-                    ):
-                        partial = self.derive_open(update.issues, viewer)
-                        if partial and self.store.merge_page(partial, update.requested_at):
-                            had_progressive = True
-                            self.redraw()
-                else:
-                    final_update = update
-            await prep_task
-        finally:
-            if not prep_task.done():
-                prep_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await prep_task
-            elif not prep_task.cancelled():
-                prep_task.exception()
-
-        assert final_update is not None
-        oversized = [r for r in config.repo_names if r in final_update.oversized_repos]
-        if viewer is None and self._needs_viewer() and (final_update.issues or not oversized):
-            viewer, _ = await self.github.whoami()
-            self.record_viewer(viewer)
-
-        synced_open = self.derive_open(final_update.issues, viewer)
-        extra_queries = await self._extra_queries(config, oversized, with_done)
-        if not extra_queries:
-            self.store.replace(
-                synced_open, final_update.requested_at, loaded_at=final_update.loaded_at
-            )
-            return
-
-        await self._stream_searches(
-            extra_queries,
-            base_issues=synced_open,
-            base_requested_at=final_update.requested_at,
-            emit_base=bool(synced_open and not had_progressive),
-        )
-
-    async def _extra_queries(
-        self, config: Config, oversized: list[str], with_done: bool
-    ) -> list[str]:
-        if not oversized and not with_done:
-            return []
-        since = (
-            datetime.now(UTC).date() - timedelta(days=config.done_window_days)
-            if with_done
-            else None
-        )
-        tab_queries = await self.queries()
-        if len(oversized) == len(config.repo_names):
-            return [
-                search.scoped(q, oversized)
-                for tab_query in tab_queries
-                for q in search.with_states(tab_query, since)
-            ]
-        queries: list[str] = []
-        if oversized:
-            oversized_cf = {r.casefold() for r in oversized}
-            for tab_query in tab_queries:
-                if _targets_only_synced_repos(tab_query, oversized_cf):
-                    continue
-                for q in search.with_states(tab_query, None):
-                    queries.append(search.scoped(q, oversized))
-        if since is not None:
-            for tab_query in tab_queries:
-                for q in search.with_states(tab_query, since):
-                    if "is:closed" in q:
-                        queries.append(search.scoped(q, config.repo_names))
-        return queries
-
-    async def _load_with_search(self, config: Config, with_done: bool) -> None:
-        since = None
-        if with_done:
-            since = datetime.now(UTC).date() - timedelta(days=config.done_window_days)
-        queries = [
-            search.scoped(query, config.repo_names)
-            for tab_query in await self.queries()
-            for query in search.with_states(tab_query, since)
-        ]
-        await self._stream_searches(queries)
-
-    async def _stream_searches(
-        self,
-        queries: Sequence[str],
-        *,
-        base_issues: Sequence[Issue] = (),
-        base_requested_at: float | None = None,
-        emit_base: bool = False,
-    ) -> None:
-        search_requested_at = store_module.now()
-        requested_at = (
-            search_requested_at
-            if base_requested_at is None
-            else min(base_requested_at, search_requested_at)
-        )
-        if not queries:
-            self.store.replace(list(base_issues), requested_at, loaded_at=datetime.now(UTC))
-            return
-        if emit_base and base_issues and self.store.merge_page(base_issues, requested_at):
-            self.redraw()
-
-        queue: asyncio.Queue[tuple[IssuePage | None, BaseException | None]] = asyncio.Queue()
-
-        async def pump(query: str) -> None:
-            stream = self.github.search_issues_pages(query)
-            try:
-                async for page in stream:
-                    queue.put_nowait((page, None))
-                queue.put_nowait((None, None))
-            except Exception as exc:
-                queue.put_nowait((None, exc))
-            finally:
-                aclose = getattr(stream, "aclose", None)
-                if aclose is not None:
-                    await aclose()
-
-        tasks = [asyncio.create_task(pump(query)) for query in queries]
-        remaining = len(tasks)
-        collected: list[Issue] = list(base_issues)
-        try:
-            while remaining:
-                page, exc = await queue.get()
-                if exc is not None:
-                    raise exc
-                if page is None:
-                    remaining -= 1
-                    continue
-                if page.viewer:
-                    self.record_viewer(page.viewer)
-                collected.extend(page.issues)
-                more_coming = page.has_next_page or remaining > 1
-                if more_coming and page.issues and self.store.merge_page(page.issues, requested_at):
-                    self.redraw()
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        deduped = list({issue.key: issue for issue in collected}.values())
-        self.store.replace(deduped, requested_at, loaded_at=datetime.now(UTC))
+            self._on_first_load()
 
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
@@ -859,11 +706,6 @@ class IssueList(IssueActions, Widget):
         self.app.run_worker(
             bulk_actions.run(self.mover, self.writer, issues, self.action_clear_selection)
         )
-
-
-def _targets_only_synced_repos(query: str, oversized_cf: set[str]) -> bool:
-    repos = [term[5:].casefold() for term in query.split() if term.startswith("repo:")]
-    return bool(repos) and not any(repo in oversized_cf for repo in repos)
 
 
 def bound_keys(tabs: Sequence[str]) -> set[str]:

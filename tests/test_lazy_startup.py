@@ -1,7 +1,8 @@
 """Startup syncs configured repos once, preloads inactive tabs, and defers drawing hidden tabs."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from listed import plain, show_tab
@@ -11,7 +12,8 @@ from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.config import Config, Repo, Status
 from lazyissues.fake import FakeGitHub
-from lazyissues.models import Issue, IssuePage
+from lazyissues.github import GitHubError
+from lazyissues.models import Issue, IssuePage, Milestone
 from lazyissues.repo_sync import REPO_SYNC_MAX_OPEN
 from lazyissues.views.issue_list import IssueList, IssueTable
 from lazyissues.views.milestones import Milestones
@@ -80,7 +82,7 @@ class GatedSync(FakeGitHub):
         super().__post_init__()
         self.gate = asyncio.Event()
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         await self.gate.wait()
         async for page in super().repo_open_issues_pages(repo):
             yield page
@@ -94,7 +96,7 @@ class Page2Gated(FakeGitHub):
         self.page1_sent = asyncio.Event()
         self.page2 = asyncio.Event()
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         async for index, page in _enumerate_async(super().repo_open_issues_pages(repo)):
             if index == 0:
                 yield page
@@ -274,6 +276,9 @@ async def test_301_open_issues_falls_back_to_search_batches_viewer_and_preloads_
 
     async def tracked_preload(self: IssueList) -> None:
         nonlocal active_preloads, max_concurrent_preloads
+        if self._loaded:
+            await real_preload(self)
+            return
         active_preloads += 1
         max_concurrent_preloads = max(max_concurrent_preloads, active_preloads)
         events.append(("start", self.id or ""))
@@ -366,6 +371,144 @@ async def test_progressive_pages_render_before_page_2_and_preserve_adr_0003_move
         assert set(listed_keys()) == {"o/r#1", "o/r#2", "o/r#3", "o/r#4"}
         assert status_groups()["In Review"] == ["o/r#1"]
         assert status_groups()["Todo"] == ["o/r#2", "o/r#3", "o/r#4"]
+
+
+async def test_preload_worker_does_not_cancel_in_flight_mover_worker():
+    class Page2AndWriteGated(Page2Gated):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.write_gate = asyncio.Event()
+
+        async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
+            await self.write_gate.wait()
+            await super().add_labels(repo, number, names)
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issues = [
+        Issue(
+            "o/r",
+            number,
+            f"Issue {number}",
+            f"https://github.com/o/r/issues/{number}",
+            assignees=("me",),
+            labels=("todo",),
+            updated_at=(base + timedelta(minutes=10 - number)).isoformat(),
+        )
+        for number in range(1, 5)
+    ]
+    config = Config(
+        repos=[Repo("o/r")],
+        statuses=[Status("Todo"), Status("In Review", key="v")],
+    )
+    github = Page2AndWriteGated(
+        viewer="me",
+        issues=issues,
+        labels={"o/r": ["todo", "in-review"]},
+        page_size=2,
+    )
+    app = LazyIssuesApp(config, github)
+    async with app.run_test() as pilot:
+        await github.page1_sent.wait()
+        table = app.query_one("#my-work DataTable", DataTable)
+        await until(pilot, lambda: "o/r#1" in table.rows)
+        table.move_cursor(row=table.get_row_index("o/r#1"))
+        await pilot.pause()
+        await pilot.press("V")
+        await until(pilot, lambda: app.moves.pending("o/r#1") == "In Review")
+
+        # Finishing MyWork launches `_preload_tabs` in group="preload"; Mover must stay alive.
+        github.page2.set()
+        await until(pilot, lambda: app.query_one(Unassigned)._loaded)
+        assert app.moves.pending("o/r#1") == "In Review"
+
+        from lazyissues.statuses import StatusRules
+
+        github.write_gate.set()
+        await settle(pilot)
+        assert app.moves.pending("o/r#1") is None
+        [moved] = [i for i in app.query_one(MyWork).store.issues if i.key == "o/r#1"]
+        assert StatusRules(config).status_of(moved).name == "In Review"
+
+
+async def test_failed_silent_preload_retries_on_show_and_reload_during_preload_toasts():
+    class FlakyMilestones(FakeGitHub):
+        def __post_init__(self) -> None:
+            super().__post_init__()
+            self.fail_milestones = True
+            self.gate: asyncio.Event | None = None
+
+        async def repo_milestones(self, repo: str, fresh: bool = False) -> list[Milestone]:
+            if self.gate is not None:
+                await self.gate.wait()
+            if self.fail_milestones:
+                raise GitHubError("milestones down")
+            return await super().repo_milestones(repo, fresh=fresh)
+
+    config = Config(repos=[Repo("o/r")], statuses=[Status("Todo")], team=["sam"])
+    github = FlakyMilestones(viewer="me", issues=_build_repo_issues(5), milestones={"o/r": ["v1"]})
+    app = LazyIssuesApp(config, github)
+    async with app.run_test(notifications=True) as pilot:
+        await settle(pilot)
+        milestones = app.query_one(Milestones)
+        assert not milestones._loaded
+        assert list(app.screen.query("Toast")) == []
+
+        github.fail_milestones = False
+        await show_tab(pilot, "milestones")
+        assert milestones._loaded
+        assert milestones.error is None
+        assert {i.key for i in milestones.store.issues} == {"o/r#1", "o/r#2"}
+
+    # Interactive reload() while silent preload is in flight clears silent and shows error toast.
+    gated = FlakyMilestones(viewer="me", issues=_build_repo_issues(5), milestones={"o/r": ["v1"]})
+    gated.gate = asyncio.Event()
+    app2 = LazyIssuesApp(config, gated)
+    async with app2.run_test(notifications=True) as pilot:
+        milestones = app2.query_one(Milestones)
+        await until(pilot, lambda: milestones.refreshing)
+        milestones.reload(force=True)
+        gated.gate.set()
+        await settle(pilot)
+        toasts = [str(toast.render()) for toast in app2.screen.query("Toast")]
+        assert any("milestones down" in text for text in toasts)
+
+
+async def test_oversized_repo_force_false_reload_does_not_revert_external_github_changes():
+    config = Config(
+        repos=[Repo("o/r")],
+        statuses=[Status("Todo"), Status("In Review", key="v"), Status("Blocked")],
+    )
+    github = FakeGitHub(
+        viewer="me",
+        issues=_build_repo_issues(REPO_SYNC_MAX_OPEN + 1),
+        labels={"o/r": ["todo", "in-review", "blocked"]},
+        milestones={"o/r": ["v1"]},
+    )
+    app = LazyIssuesApp(config, github)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        table = app.query_one("#my-work DataTable", DataTable)
+        table.move_cursor(row=table.get_row_index("o/r#1"))
+        await pilot.pause()
+        await pilot.press("V")
+        await settle(pilot)
+        from lazyissues.statuses import StatusRules
+
+        rules = StatusRules(config)
+        [moved] = [i for i in app.query_one(MyWork).store.issues if i.key == "o/r#1"]
+        assert rules.status_of(moved).name == "In Review"
+
+        # External change on GitHub after our local move.
+        for idx, item in enumerate(github.issues):
+            if item.key == "o/r#1":
+                github.issues[idx] = replace(item, labels=("blocked",))
+                break
+
+        # Pressing `d` triggers reload(force=False); fresh search must keep external state.
+        await pilot.press("d")
+        await settle(pilot)
+        [reloaded] = [i for i in app.query_one(MyWork).store.issues if i.key == "o/r#1"]
+        assert rules.status_of(reloaded).name == "Blocked"
 
 
 def test_startup_imports_skip_detail_setup_demo_and_markdown():

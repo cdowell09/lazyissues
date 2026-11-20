@@ -10,7 +10,6 @@ class Unassigned(IssueList):
     LABEL = "Unassigned"
     QUERY = "is:issue no:assignee"
     EMPTY = "Every open issue has an assignee."
-    USE_REPO_SYNC = True
 
     def derive_open(self, issues: Sequence[Issue], viewer: str | None) -> list[Issue]:
         return [issue for issue in issues if not issue.assignees]

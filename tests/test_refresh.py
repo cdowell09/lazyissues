@@ -1,7 +1,7 @@
 """My Work opens from the snapshot and refreshes in the background."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 from textual.app import App
@@ -38,7 +38,7 @@ class Gated(FakeGitHub):
         await self.gate.wait()
         return await super().search_issues(query)
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         await self.gate.wait()
         async for page in super().repo_open_issues_pages(repo):
             yield page
@@ -48,7 +48,7 @@ class Unreachable(FakeGitHub):
     async def search_issues(self, query: str) -> list[Issue]:
         raise GitHubError("Couldn't reach GitHub: timed out")
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         raise GitHubError("Couldn't reach GitHub: timed out")
         async for page in super().repo_open_issues_pages(repo):
             yield page
@@ -145,7 +145,7 @@ class Flaky(FakeGitHub):
             raise GitHubError("Couldn't reach GitHub: timed out")
         return await super().search_issues(query)
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         if self.down:
             raise GitHubError("Couldn't reach GitHub: timed out")
         async for page in super().repo_open_issues_pages(repo):

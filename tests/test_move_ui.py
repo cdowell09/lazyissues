@@ -2,7 +2,7 @@
 
 import asyncio
 import webbrowser
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 
 from listed import plain, show_tab
 from textual.app import App
@@ -40,7 +40,7 @@ class Gated(FakeGitHub):
         await self.searches.wait()
         return answer
 
-    async def repo_open_issues_pages(self, repo: str) -> AsyncIterator[IssuePage]:
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
         pages = [page async for page in super().repo_open_issues_pages(repo)]
         await self.searches.wait()
         for page in pages:

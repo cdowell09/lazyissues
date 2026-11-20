@@ -5,9 +5,9 @@ import hashlib
 import json
 import math
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -58,18 +58,14 @@ class IssueStore:
         self.issues: list[Issue] = []
         self.loaded_at: datetime | None = None  # when GitHub answered the read, if one has
         self._load()
+        self._committed: list[Issue] = list(self.issues)
         self.requested_at = -math.inf  # when the read behind `issues` was requested
         self._written: dict[str, tuple[Issue, float]] = {}  # latest confirmed write per key
         self._saving: asyncio.TimerHandle | None = None  # the pending save, if any
 
-    async def refresh(self, read: Awaitable[list[Issue]]) -> None:
-        """Await a read from GitHub and apply it, stamped with when it was requested."""
-        requested_at = now()
-        issues = await read
-        self.replace(issues, requested_at, loaded_at=datetime.now(UTC))
-
     def merge_page(self, issues: Sequence[Issue], requested_at: float) -> bool:
-        """Upsert one incoming page into `issues` without pruning unseen rows or saving.
+        """Upsert one incoming page into `issues` without pruning unseen rows, advancing
+        `requested_at`, or saving.
 
         A page from a read requested before the one already applied is ignored. Returns
         whether `issues` changed.
@@ -87,10 +83,35 @@ class IssueStore:
                 merged.append(settled)
         changed = merged != self.issues
         self.issues = merged
-        self.requested_at = requested_at
         return changed
 
-    def replace(self, issues: list[Issue], requested_at: float, loaded_at: datetime | None) -> None:
+    def rollback_pages(self) -> None:
+        """Restore the last committed issue list after an interrupted progressive read."""
+        self.issues = list(self._committed)
+
+    def replace_sources(
+        self,
+        sources: Sequence[tuple[Sequence[Issue], float]],
+        read_at: float,
+        loaded_at: datetime | None,
+    ) -> None:
+        """Apply a read started at `read_at` whose sources were requested at their own
+        timestamps, settling each source against its own `source_requested_at`."""
+        if read_at < self.requested_at:
+            return
+        by_key: dict[str, Issue] = {}
+        for source_issues, source_requested_at in sources:
+            for issue in source_issues:
+                by_key[issue.key] = self._settle(issue, source_requested_at)
+        self.issues = list(by_key.values())
+        self._committed = list(self.issues)
+        self.requested_at = read_at
+        self.loaded_at = loaded_at
+        self._save()
+
+    def replace(
+        self, issues: Sequence[Issue], requested_at: float, loaded_at: datetime | None
+    ) -> None:
         """Apply a read requested at `requested_at` (on `now`'s clock) and answered at
         `loaded_at`.
 
@@ -98,29 +119,33 @@ class IssueStore:
         issue moved since the read was requested keeps its confirmed status, and one
         written since keeps the copy GitHub confirmed for the write (ADR 0003).
         """
-        if requested_at < self.requested_at:
-            return
-        self.issues = [self._settle(issue, requested_at) for issue in issues]
-        self.requested_at = requested_at
-        self.loaded_at = loaded_at
-        self._save()
+        self.replace_sources([(issues, requested_at)], requested_at, loaded_at)
 
     def apply_moves(self) -> None:
         """Show the moves confirmed since the loaded read was requested."""
-        self.replace(self.issues, self.requested_at, self.loaded_at)
+        self.issues = [self._settle(issue, self.requested_at) for issue in self.issues]
+        self._committed = [self._settle(issue, self.requested_at) for issue in self._committed]
+        self._save()
 
     def update(self, issue: Issue, written_at: float) -> bool:
         """Replace the loaded copy of `issue` with the one GitHub confirmed for a write
         sent at `written_at` (on `now`'s clock); False when `issue` isn't loaded here."""
         existing = self._written.get(issue.key)
-        if existing is None or written_at >= existing[1]:
-            self._written[issue.key] = (issue, written_at)
-        if all(loaded.key != issue.key for loaded in self.issues):
-            return False
-        applied = self._written[issue.key][0]
-        self.issues = [applied if loaded.key == issue.key else loaded for loaded in self.issues]
-        self._save()
-        return True
+        if existing is not None and written_at < existing[1]:
+            return any(loaded.key == issue.key for loaded in self.issues)
+        self._written[issue.key] = (issue, written_at)
+        applied = self.moves.settle(issue, written_at)
+        in_committed = any(loaded.key == issue.key for loaded in self._committed)
+        if in_committed:
+            self._committed = [
+                applied if loaded.key == issue.key else loaded for loaded in self._committed
+            ]
+        in_issues = any(loaded.key == issue.key for loaded in self.issues)
+        if in_issues:
+            self.issues = [applied if loaded.key == issue.key else loaded for loaded in self.issues]
+        if in_committed or in_issues:
+            self._save()
+        return in_issues
 
     def _settle(self, issue: Issue, requested_at: float) -> Issue:
         """`issue` as read at `requested_at`, unless it was written since: then the written
@@ -172,7 +197,7 @@ class IssueStore:
         snapshot = {
             "version": SNAPSHOT_VERSION,
             "loaded_at": self.loaded_at.isoformat() if self.loaded_at else None,
-            "issues": [asdict(i) for i in self.issues],
+            "issues": [asdict(i) for i in self._committed],
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
