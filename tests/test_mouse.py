@@ -320,7 +320,7 @@ async def test_the_detail_footer_fits_80_columns_with_and_without_copy():
         assert footer(app) == (keys, 59)
 
         await drag(pilot, detail.query_one("#detail .title"), (0, 0), (3, 0))
-        await until(pilot, lambda: copy_key(app) is not None)
+        await until(pilot, lambda: copy_key(app) is not None and footer(app)[1] > 0)
         assert footer(app) == (["^c Copy", *keys], 68)  # within 80 columns
 
 
