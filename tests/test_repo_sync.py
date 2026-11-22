@@ -361,3 +361,62 @@ async def test_apply_moves_preserves_writes_ignores_rejections_drops_closed_and_
     sync.apply_moves([(reopened3, 14.0)])
     cached = await collect(sync, ["o/r"])
     assert [i.number for i in cached[-1].issues] == [1, 3]
+
+
+async def test_reopen_confirmed_while_repo_sync_is_in_flight_is_retained():
+    from lazyissues.move_planner import Reopen
+    from lazyissues.move_tracker import MoveTracker
+
+    open1 = Issue("o/r", 1, "Issue 1", "https://github.com/o/r/issues/1")
+    closed2 = Issue("o/r", 2, "Issue 2", "https://github.com/o/r/issues/2", closed=True)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Gated(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str):
+            started.set()
+            await release.wait()
+            async for page in super().repo_open_issues_pages(repo):
+                yield page
+
+    moves = MoveTracker()
+    github = Gated(viewer="me", issues=[open1, closed2])
+    sync = RepoSync(github, moves, now=lambda: 10.0)
+
+    sync_task = asyncio.create_task(collect(sync, ["o/r"]))
+    await started.wait()
+
+    moves.start(closed2, "Reopen")
+    moves.confirm(closed2.key, [Reopen()], at=12.0)
+    reopened2 = Issue("o/r", 2, "Issue 2", "https://github.com/o/r/issues/2")
+    sync.apply_moves([(reopened2, 12.0)])
+    release.set()
+
+    updates = await sync_task
+    assert [i.number for i in updates[-1].issues] == [1, 2]
+
+
+async def test_close_before_repo_task_starts_does_not_deadlock_or_leak_in_flight():
+    issue1 = Issue("o/r", 1, "Issue 1", "https://github.com/o/r/issues/1")
+    entered = False
+
+    class Spy(FakeGitHub):
+        async def repo_open_issues_pages(self, repo: str):
+            nonlocal entered
+            entered = True
+            async for page in super().repo_open_issues_pages(repo):
+                yield page
+
+    github = Spy(viewer="me", issues=[issue1])
+    sync = RepoSync(github)
+
+    sync_task = asyncio.create_task(collect(sync, ["o/r"]))
+    await asyncio.sleep(0)
+    assert not entered
+    sync.close()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(sync_task, timeout=1.0)
+    assert not entered
+
+    updates = await collect(sync, ["o/r"])
+    assert [i.number for i in updates[-1].issues] == [1]

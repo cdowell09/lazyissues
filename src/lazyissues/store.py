@@ -143,7 +143,7 @@ class IssueStore:
         in_issues = any(loaded.key == issue.key for loaded in self.issues)
         if in_issues:
             self.issues = [applied if loaded.key == issue.key else loaded for loaded in self.issues]
-        if in_committed or in_issues:
+        if in_committed:
             self._save()
         return in_issues
 

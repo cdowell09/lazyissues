@@ -85,6 +85,8 @@ class _InFlightRepo:
         last_page: tuple[Issue, ...],
         error: BaseException | None,
     ) -> None:
+        if self._done is not None:
+            return
         event = _DoneEvent(self.repo_key, entry, last_page, error)
         self._done = event
         for queue in list(self._listeners):
@@ -122,6 +124,7 @@ class RepoSync:
         self._entries: dict[str, _RepoEntry] = {}
         self._in_flight: dict[str, _InFlightRepo] = {}
         self._writes: dict[str, tuple[Issue, float]] = {}
+        self._reopened: dict[str, tuple[Issue, float]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
 
     def close(self) -> None:
@@ -137,7 +140,7 @@ class RepoSync:
         self._writes[issue.key] = (issue, written_at)
         repo_key = issue.repo.casefold()
         entry = self._entries.get(repo_key)
-        if entry is None or entry.oversized or written_at < entry.requested_at:
+        if entry is None or entry.oversized or written_at <= entry.requested_at:
             return
         applied = self._moves.settle(issue, written_at)
         self._entries[repo_key] = replace(entry, issues=_apply_write(entry.issues, applied))
@@ -158,13 +161,16 @@ class RepoSync:
         for moved, confirmed_at in confirmed:
             if moved.closed:
                 continue
+            existing_reopen = self._reopened.get(moved.key)
+            if existing_reopen is None or confirmed_at >= existing_reopen[1]:
+                self._reopened[moved.key] = (moved, confirmed_at)
             repo_key = moved.repo.casefold()
             entry = self._entries.get(repo_key)
-            if entry is None or entry.oversized or confirmed_at < entry.requested_at:
+            if entry is None or entry.oversized or confirmed_at <= entry.requested_at:
                 continue
             if any(existing.key == moved.key for existing in entry.issues):
                 continue
-            reopened = self._settle_issue(moved, confirmed_at)
+            reopened = self._settle_issue(moved, entry.requested_at)
             if not reopened.closed:
                 self._entries[repo_key] = replace(entry, issues=(*entry.issues, reopened))
 
@@ -282,7 +288,20 @@ class RepoSync:
         self._in_flight[repo_key] = in_flight
         task = asyncio.create_task(self._run_repo(repo, repo_key, in_flight))
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+
+        def on_done(done_task: asyncio.Task[None]) -> None:
+            self._tasks.discard(done_task)
+            if self._in_flight.get(repo_key) is in_flight:
+                del self._in_flight[repo_key]
+            if in_flight._done is None:
+                exc: BaseException = (
+                    asyncio.CancelledError()
+                    if done_task.cancelled()
+                    else (done_task.exception() or asyncio.CancelledError())
+                )
+                in_flight.finish(None, (), exc)
+
+        task.add_done_callback(on_done)
         return in_flight
 
     def _commit(self, repo_key: str, entry: _RepoEntry) -> None:
@@ -312,6 +331,13 @@ class RepoSync:
                 and written_at > requested_at
             ):
                 by_key[key] = self._moves.settle(written, written_at)
+        for key, (reopened, confirmed_at) in self._reopened.items():
+            if (
+                key not in by_key
+                and reopened.repo.casefold() == repo_key
+                and confirmed_at > requested_at
+            ):
+                by_key[key] = self._settle_issue(reopened, requested_at)
         return tuple(issue for issue in by_key.values() if not issue.closed)
 
     async def _run_repo(self, repo: str, repo_key: str, in_flight: _InFlightRepo) -> None:
@@ -327,21 +353,13 @@ class RepoSync:
                 async for page in page_stream:
                     if first_page:
                         viewer = page.viewer
-                        if (page.total_count or 0) > REPO_SYNC_MAX_OPEN:
-                            entry = _RepoEntry(
-                                issues=(),
-                                requested_at=in_flight.requested_at,
-                                loaded_at=datetime.now(UTC),
-                                oversized=True,
-                                viewer=viewer,
-                            )
-                            self._commit(repo_key, entry)
-                            in_flight.finish(entry, (), None)
-                            return
                     fetched += len(page.issues)
-                    if fetched > REPO_SYNC_HARD_CAP or (
-                        fetched == REPO_SYNC_HARD_CAP and page.has_next_page
-                    ):
+                    oversized = (
+                        (first_page and (page.total_count or 0) > REPO_SYNC_MAX_OPEN)
+                        or fetched > REPO_SYNC_HARD_CAP
+                        or (fetched == REPO_SYNC_HARD_CAP and page.has_next_page)
+                    )
+                    if oversized:
                         entry = _RepoEntry(
                             issues=(),
                             requested_at=in_flight.requested_at,
@@ -352,12 +370,12 @@ class RepoSync:
                         self._commit(repo_key, entry)
                         in_flight.finish(entry, (), None)
                         return
+                    collected.extend(page.issues)
                     settled_page = tuple(
                         settled
                         for raw in page.issues
                         if not (settled := self._settle_issue(raw, in_flight.requested_at)).closed
                     )
-                    collected.extend(settled_page)
                     last_page = settled_page
                     if page.has_next_page:
                         in_flight.emit_page(settled_page, viewer if first_page else None)
