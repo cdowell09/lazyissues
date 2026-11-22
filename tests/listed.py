@@ -32,14 +32,22 @@ async def show_tab(pilot: Pilot, view: str) -> None:
     pane = pilot.app.query_one(f"#{view}").parent
     assert pane is not None and pane.id is not None
     pilot.app.query_one(TabbedContent).active = pane.id
-    # The refresh starts when the Show event arrives, which may take more than a pause on a
-    # slow machine; waiting on workers before then would find none.
+    # The Show event (which starts a tab's first load or draws preloaded rows) may take
+    # more than one pause on a slow runner; wait until the tab is visible and drawn.
     listed = pilot.app.query_one(f"#{view}", IssueList)
     for _ in range(200):
-        if listed._loaded:
+        if (
+            listed._loaded
+            and not listed._stale
+            and all(widget.display for widget in listed.ancestors_with_self)
+        ):
             break
         await pilot.pause(0.01)
     else:
         raise AssertionError(f"{view} was never shown")
     await pilot.app.workers.wait_for_complete()
+    for _ in range(200):
+        if not listed._stale:
+            break
+        await pilot.pause(0.01)
     await pilot.pause()
