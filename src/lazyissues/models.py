@@ -36,6 +36,16 @@ class Issue:
         return self.parent and _ref(self.parent)
 
 
+@dataclass(frozen=True)
+class IssuePage:
+    """One page of issues returned by GitHub, with connection metadata from that response."""
+
+    issues: tuple[Issue, ...]
+    total_count: int | None = None
+    has_next_page: bool = False
+    viewer: str | None = None
+
+
 def _ref(key: str) -> str:
     """An issue key without its owner: `name#number`."""
     return key.split("/", 1)[1]

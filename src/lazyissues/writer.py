@@ -5,23 +5,19 @@ One `Writer` serves every view, as `Mover` does for moves. A list or the detail 
 confirmed.
 """
 
+from __future__ import annotations
+
 import math
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from textual.app import App
 from textual.binding import Binding
 from textual.signal import Signal
 
-from lazyissues.bulk import Outcome
 from lazyissues.config import Config
-from lazyissues.forms.assign import AssignForm
-from lazyissues.forms.comment import CommentForm
-from lazyissues.forms.create import CreateForm
-from lazyissues.forms.edit import EditForm
-from lazyissues.forms.form import Form, Written
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.move_planner import MoveTo, Skip
@@ -29,6 +25,10 @@ from lazyissues.move_tracker import MoveTracker
 from lazyissues.mover import Mover
 from lazyissues.statuses import StatusRules
 from lazyissues.store import now
+
+if TYPE_CHECKING:
+    from lazyissues.bulk import Outcome
+    from lazyissues.forms.form import Form, Written
 
 
 class Writer:
@@ -62,16 +62,24 @@ class Writer:
         return self._written_at.get(key, -math.inf) > requested_at
 
     def comment(self, issue: Issue) -> None:
+        from lazyissues.forms.comment import CommentForm
+
         self._open(CommentForm(self.github, issue))
 
     def assign(self, issue: Issue) -> None:
+        from lazyissues.forms.assign import AssignForm
+
         self._open(AssignForm(self.github, issue, self.config.team))
 
     def edit(self, issue: Issue) -> None:
+        from lazyissues.forms.edit import EditForm
+
         self._open(EditForm(self.github, issue, StatusRules(self.config), self.details))
 
     def create(self, near: Issue | None) -> None:
         """Create an issue, in the last repo used, else `near`'s, else the first."""
+        from lazyissues.forms.create import CreateForm
+
         repos = self.config.repo_names
         candidates = (self.last_repo, near and near.repo)
         repo = next((name for name in candidates if name in repos), repos[0])
@@ -81,6 +89,9 @@ class Writer:
         """Add `login` to the assignees of each issue `outcomes` plans for, keeping the
         others, one by one, and show GitHub's copy of each, all at once at the end; with
         GitHub's error on each it refuses."""
+        from lazyissues.forms.assign import AssignForm
+        from lazyissues.forms.form import Written
+
         done, written = [], []
         for outcome in outcomes:
             if not isinstance(outcome.plan, Skip):

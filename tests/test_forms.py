@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import subprocess
 import sys
+from collections.abc import AsyncGenerator
 from dataclasses import replace
 
 from listed import show_tab
@@ -16,7 +17,7 @@ from lazyissues.detail import IssueDetailScreen
 from lazyissues.fake import FakeGitHub
 from lazyissues.forms.form import Form, Picker
 from lazyissues.github import GitHubError
-from lazyissues.models import Issue, IssueDetail, Project
+from lazyissues.models import Issue, IssueDetail, IssuePage, Project
 from lazyissues.mover import RejectedMoveBanner
 from lazyissues.views.issue_list import IssueList
 
@@ -100,12 +101,13 @@ async def test_shift_enter_and_ctrl_j_add_newlines_and_pasted_lines_stay():
 
 
 class Recording(FakeGitHub):
-    """Records searches; after `hold()`, answers the next detail fetch as GitHub had it
+    """Records reads; after `hold()`, answers the next detail fetch as GitHub had it
     when asked, but only once `ready` is set."""
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.searches: list[str] = []
+        self.syncs: list[str] = []
         self.ready = asyncio.Event()
         self.holding = False
 
@@ -116,6 +118,11 @@ class Recording(FakeGitHub):
     async def search_issues(self, query: str) -> list[Issue]:
         self.searches.append(query)
         return await super().search_issues(query)
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+        self.syncs.append(repo)
+        async for page in super().repo_open_issues_pages(repo):
+            yield page
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         detail = await super().issue_detail(repo, number)
@@ -136,7 +143,7 @@ def recording() -> Recording:
     )
 
 
-async def test_a_comment_reloads_no_tab_and_an_assignment_reloads_the_others():
+async def test_a_comment_reloads_no_tab_and_an_assignment_reloads_the_others(monkeypatch):
     gateway = recording()
     app = app_on(gateway)
     async with app.run_test() as pilot:
@@ -145,20 +152,35 @@ async def test_a_comment_reloads_no_tab_and_an_assignment_reloads_the_others():
         for tab in ("tab-1", "tab-2", "tab-3", "tab-0"):  # tabs not yet shown wait to be
             tabs.active = tab
             await settle(pilot)
-        app.query_one("#my-work").query_one(DataTable).focus()
+        my_work = app.query_one("#my-work", IssueList)
+        my_work.query_one(DataTable).focus()
         await select_first_issue(pilot)
         gateway.searches.clear()
+        gateway.syncs.clear()
+        reloaded: list[str] = []
+        real_reload = IssueList.reload
+
+        def spy_reload(self: IssueList, *, force: bool = True) -> None:
+            reloaded.append(self.id or "")
+            real_reload(self, force=force)
+
+        monkeypatch.setattr(IssueList, "reload", spy_reload)
 
         await pilot.press("C", "o", "k", "enter")
         await settle(pilot)
         assert gateway.searches == []  # a comment can't change which tabs list the issue
+        assert gateway.syncs == []
+        assert reloaded == []
 
         await pilot.press("a")
         await settle(pilot)
         await pilot.press("tab", "down", "space", "ctrl+s")  # unassign me
         await settle(pilot)
-        assert gateway.searches  # tabs that don't list it may list it now
-        assert not any("assignee:@me" in query for query in gateway.searches)  # My Work has it
+        assert "unassigned" in reloaded  # tabs that don't list it reload from RepoSync's overlay
+        assert "my-work" not in reloaded  # My Work already has it
+        assert gateway.searches == []
+        assert gateway.syncs == []
+        assert "o/r#1" in [i.key for i in app.query_one("#unassigned", IssueList).store.issues]
 
 
 async def test_a_detail_fetch_sent_before_a_comment_doesnt_hide_it():

@@ -1,10 +1,11 @@
 """The GitHub gateway: the only code that talks to GitHub (ADR 0002)."""
 
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ from lazyissues.models import (
     Issue,
     IssueChanges,
     IssueDetail,
+    IssuePage,
     Milestone,
     Project,
     ProjectField,
@@ -51,6 +53,10 @@ class RateLimited(GitHubError):
 
 class Gateway(Protocol):
     async def search_issues(self, query: str) -> list[Issue]: ...
+
+    def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]: ...
+
+    def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]: ...
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail: ...
 
@@ -123,8 +129,17 @@ class Gateway(Protocol):
         ...
 
 
+def _env_token() -> str | None:
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if token := os.environ.get(name, "").strip():
+            return token
+    return None
+
+
 def gh_token() -> str:
-    """The token of the logged-in `gh` CLI user."""
+    """The token from `GH_TOKEN`/`GITHUB_TOKEN` or the logged-in `gh` CLI user."""
+    if token := _env_token():
+        return token
     if shutil.which("gh") is None:
         raise GitHubError("The GitHub CLI (`gh`) isn't installed: https://cli.github.com/")
     result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
@@ -153,10 +168,16 @@ fragment IssueFields on Issue {
 }
 """
 
+
+def _with_viewer(query: str) -> str:
+    return query.replace("{\n", "{\n  viewer { login }\n", 1)
+
+
 _SEARCH = (
     """
 query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ...IssueFields }
   }
@@ -164,6 +185,31 @@ query($q: String!, $after: String) {
 """
     + _ISSUE_FIELDS
 )
+
+_SEARCH_WITH_VIEWER = _with_viewer(_SEARCH)
+
+_REPO_OPEN_ISSUES = (
+    """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    id
+    issues(
+      first: 100
+      after: $after
+      states: [OPEN]
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
+    }
+  }
+}
+"""
+    + _ISSUE_FIELDS
+)
+
+_REPO_OPEN_ISSUES_WITH_VIEWER = _with_viewer(_REPO_OPEN_ISSUES)
 
 # Every query or mutation that builds an `IssueDetail` selects these fields, so `_detail`
 # can read them; writes return them so the app shows GitHub's copy after each change.
@@ -411,16 +457,24 @@ def _project_statuses(items: list[dict[str, Any]]) -> dict[str, str]:
 class GraphQLGateway:
     def __init__(
         self,
-        token: str,
+        token: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        *,
+        token_loader: Callable[[], str] | None = None,
     ) -> None:
         self._sleep = sleep
+        self._token_loader = token_loader or gh_token
+        self._token_lock = asyncio.Lock()
         if transport is None and "pytest" in sys.modules:
             raise RuntimeError("Tests must not reach GitHub; pass a fake transport.")
+        if token is None and token_loader is None:
+            token = _env_token()
+        self._token = token
+        headers = {"Authorization": f"bearer {token}"} if token is not None else {}
         self._client = httpx.AsyncClient(
             transport=transport,
-            headers={"Authorization": f"bearer {token}"},
+            headers=headers,
             timeout=30,
         )
         # Per-session caches: IDs never change, and the rest only changes by our own writes.
@@ -454,9 +508,20 @@ class GraphQLGateway:
         await self._sleep(wait)
         return await self._post(query, variables)
 
+    async def _ensure_token(self) -> None:
+        if self._token is not None:
+            return
+        async with self._token_lock:
+            if self._token is not None:
+                return
+            token = await asyncio.to_thread(self._token_loader)
+            self._token = token
+            self._client.headers["Authorization"] = f"bearer {token}"
+
     async def _post(
         self, query: str, variables: dict[str, Any]
     ) -> tuple[dict[str, Any], httpx.Headers]:
+        await self._ensure_token()
         try:
             response = await self._client.post(
                 API_URL, json={"query": query, "variables": variables}
@@ -494,11 +559,89 @@ class GraphQLGateway:
             after = page["pageInfo"]["endCursor"]
         return nodes
 
-    async def search_issues(self, query: str) -> list[Issue]:
-        nodes = await self._nodes(_SEARCH, lambda d: d["search"], q=query)
-        for node in nodes:  # remember the IDs, so a write needs no lookup
+    def _record_viewer(self, data: dict[str, Any], headers: httpx.Headers) -> str | None:
+        if self._viewer is None and (viewer := data.get("viewer")):
+            self._viewer = viewer["login"], _parse_scopes(headers)
+        return self._viewer[0] if self._viewer is not None else None
+
+    def _cache_issue_ids(self, nodes: Sequence[dict[str, Any]]) -> None:
+        for node in nodes:
             self._issue_ids[node["repository"]["nameWithOwner"], node["number"]] = node["id"]
-        return [_issue(node) for node in nodes]
+
+    async def _issue_pages(
+        self,
+        query: str,
+        with_viewer: str,
+        extract: Callable[[dict[str, Any]], dict[str, Any]],
+        count_key: str,
+        *,
+        limit: int | None,
+        **variables: Any,
+    ) -> AsyncGenerator[IssuePage, None]:
+        after: str | None = None
+        fetched = 0
+        first_page = True
+        while True:
+            gql = with_viewer if first_page and self._viewer is None else query
+            data, headers = await self._send(gql, read=True, after=after, **variables)
+            viewer = self._record_viewer(data, headers) if first_page else None
+            first_page = False
+            page = extract(data)
+            nodes = [node for node in page["nodes"] if node]
+            if limit is not None:
+                nodes = nodes[: limit - fetched]
+            self._cache_issue_ids(nodes)
+            fetched += len(nodes)
+            page_info = page["pageInfo"]
+            end_cursor = page_info.get("endCursor")
+            has_next_page = (
+                bool(page_info["hasNextPage"])
+                and (limit is None or fetched < limit)
+                and end_cursor is not None
+            )
+            yield IssuePage(
+                issues=tuple(_issue(node) for node in nodes),
+                total_count=page.get(count_key),
+                has_next_page=has_next_page,
+                viewer=viewer,
+            )
+            if not has_next_page:
+                break
+            after = end_cursor
+
+    def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]:
+        return self._issue_pages(
+            _SEARCH,
+            _SEARCH_WITH_VIEWER,
+            lambda data: data["search"],
+            "issueCount",
+            limit=SEARCH_LIMIT,
+            q=query,
+        )
+
+    async def search_issues(self, query: str) -> list[Issue]:
+        return [issue async for page in self.search_issues_pages(query) for issue in page.issues]
+
+    def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+        owner, name = repo.split("/", 1)
+
+        def extract(data: dict[str, Any]) -> dict[str, Any]:
+            repo_data = data["repository"]
+            if repo_data is None:
+                raise GitHubError(f"Could not resolve to a Repository with the name '{repo}'.")
+            if repo_id := repo_data.get("id"):
+                self._repo_ids[repo] = repo_id
+            return repo_data["issues"]
+
+        return self._issue_pages(
+            _REPO_OPEN_ISSUES,
+            _REPO_OPEN_ISSUES_WITH_VIEWER,
+            extract,
+            "totalCount",
+            limit=None,
+            owner=owner,
+            name=name,
+        )
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         owner, name = repo.split("/", 1)
@@ -509,8 +652,7 @@ class GraphQLGateway:
         """The viewer's login, and the `gh` token's OAuth scopes from the response header."""
         if self._viewer is None:
             data, headers = await self._send(_VIEWER, read=True)
-            scopes = {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")}
-            self._viewer = data["viewer"]["login"], scopes - {""}
+            self._viewer = data["viewer"]["login"], _parse_scopes(headers)
         return self._viewer
 
     async def repo_labels(self, repo: str) -> list[str]:
@@ -800,6 +942,10 @@ class GraphQLGateway:
                 raise GitHubError(f"Project {project} has no single-select Status field.")
             self._boards[project] = board
         return self._boards[project]
+
+
+def _parse_scopes(headers: httpx.Headers) -> set[str]:
+    return {scope.strip() for scope in headers.get("X-OAuth-Scopes", "").split(",")} - {""}
 
 
 def _named(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:

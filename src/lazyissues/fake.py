@@ -1,7 +1,7 @@
 """An in-memory GitHub, used by the test suite and by `--demo`."""
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +13,7 @@ from lazyissues.models import (
     Issue,
     IssueChanges,
     IssueDetail,
+    IssuePage,
     Milestone,
     Project,
     parse_key,
@@ -39,6 +40,8 @@ class FakeGitHub:
     milestones: dict[str, list[str]] = field(default_factory=dict)
     assignable: dict[str, list[str]] = field(default_factory=dict)  # assignable logins, by repo
     searched: list[str] = field(default_factory=list)  # every search sent, in order
+    synced_repos: list[str] = field(default_factory=list)
+    page_size: int = 100
 
     def __post_init__(self) -> None:
         # `closed` is the fake's only record of state; results carry it as `Issue.closed`.
@@ -54,6 +57,40 @@ class FakeGitHub:
         except ValueError as e:  # an unclosed quote
             raise GitHubError(f"Invalid search query: {e}") from None
         return [self._current(issue) for issue in self.issues if self._matches(issue, terms)]
+
+    async def search_issues_pages(self, query: str) -> AsyncGenerator[IssuePage, None]:
+        issues = await self.search_issues(query)
+        for page in self._pages(issues):
+            yield page
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+        self.synced_repos.append(repo)
+        open_issues = sorted(
+            (
+                self._current(issue)
+                for issue in self.issues
+                if issue.repo.casefold() == repo.casefold() and issue.key not in self.closed
+            ),
+            key=_updated,
+            reverse=True,
+        )
+        for page in self._pages(open_issues):
+            yield page
+
+    def _pages(self, issues: list[Issue]) -> list[IssuePage]:
+        size = max(1, self.page_size)
+        total = len(issues)
+        if not issues:
+            return [IssuePage((), total_count=0, has_next_page=False, viewer=self.viewer)]
+        return [
+            IssuePage(
+                issues=tuple(issues[start : start + size]),
+                total_count=total,
+                has_next_page=start + size < total,
+                viewer=self.viewer if start == 0 else None,
+            )
+            for start in range(0, total, size)
+        ]
 
     async def issue_detail(self, repo: str, number: int) -> IssueDetail:
         issue = self.issues[self._index(repo, number)]
@@ -276,6 +313,13 @@ class FakeGitHub:
     def _closed_on(self, issue: Issue) -> str:
         """The UTC date `closed:` compares; one closed via `closed` this session is today."""
         return (issue.closed_at or datetime.now(UTC).isoformat())[:10]
+
+
+_NEVER = datetime.min.replace(tzinfo=UTC)
+
+
+def _updated(issue: Issue) -> datetime:
+    return datetime.fromisoformat(issue.updated_at) if issue.updated_at else _NEVER
 
 
 def _now() -> str:

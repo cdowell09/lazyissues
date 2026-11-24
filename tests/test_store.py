@@ -99,22 +99,10 @@ def test_a_store_without_a_snapshot_lives_in_memory(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
-async def test_a_refresh_answered_after_a_later_one_is_ignored():
+def test_a_replace_answered_after_a_later_one_is_ignored():
     store = IssueStore()
-    gate = asyncio.Event()
-
-    async def slow_read() -> list[Issue]:
-        await gate.wait()
-        return [issue(1, "older")]
-
-    async def fast_read() -> list[Issue]:
-        return [issue(1, "newer")]
-
-    slow = asyncio.create_task(store.refresh(slow_read()))
-    await asyncio.sleep(0)  # the slow read is requested first
-    await store.refresh(fast_read())
-    gate.set()
-    await slow
+    store.replace([issue(1, "newer")], requested_at=2.0, loaded_at=datetime.now(UTC))
+    store.replace([issue(1, "older")], requested_at=1.0, loaded_at=datetime.now(UTC))
 
     assert store.issues == [issue(1, "newer")]
 
@@ -184,6 +172,27 @@ def test_a_move_confirmed_before_a_write_is_not_applied_over_it_again(tmp_path):
     assert store.issues[0].labels == ("bug",)
 
 
+def test_out_of_order_update_does_not_revert_a_confirmed_move_or_newer_write(tmp_path):
+    path = tmp_path / "snapshot.json"
+    moves = MoveTracker()
+    store = IssueStore(path, moves)
+    store.replace([issue(1, "Initial", labels=("todo",))], requested_at=1.0, loaded_at=None)
+
+    moves.start(store.issues[0], "doing")
+    moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
+    store.apply_moves()
+
+    # A write sent before the move confirmed arrives later: keep its title and the confirmed move.
+    assert store.update(issue(1, "Edited", labels=("todo",)), written_at=3.0) is True
+    assert store.issues == [issue(1, "Edited", labels=("doing",))]
+    assert IssueStore(path).issues == [issue(1, "Edited", labels=("doing",))]
+
+    # An even older write arriving out of order must not overwrite the newer write or move.
+    assert store.update(issue(1, "Older edit", labels=("todo",)), written_at=2.0) is True
+    assert store.issues == [issue(1, "Edited", labels=("doing",))]
+    assert IssueStore(path).issues == [issue(1, "Edited", labels=("doing",))]
+
+
 def test_a_burst_of_changes_saves_one_snapshot_holding_the_last(tmp_path, monkeypatch):
     monkeypatch.setattr("lazyissues.store.SAVE_DELAY", 0.01)
     path = tmp_path / "snapshot.json"
@@ -212,18 +221,14 @@ def test_flush_saves_a_pending_snapshot_at_once(tmp_path):
     asyncio.run(change_and_exit())
 
 
-async def test_a_refresh_records_when_its_data_was_loaded_and_the_snapshot_keeps_it(tmp_path):
+def test_replace_records_when_its_data_was_loaded_and_the_snapshot_keeps_it(tmp_path):
     path = tmp_path / "snapshot.json"
     store = IssueStore(path)
     assert store.loaded_at is None
 
-    async def read() -> list[Issue]:
-        return [issue(1)]
-
-    before = datetime.now(UTC)
-    await store.refresh(read())
-    loaded_at = store.loaded_at
-    assert loaded_at is not None and before <= loaded_at <= datetime.now(UTC)
+    loaded_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    store.replace([issue(1)], requested_at=1.0, loaded_at=loaded_at)
+    assert store.loaded_at == loaded_at
 
     store.update(issue(1, "Written"), written_at=store.requested_at + 1)
     store.apply_moves()
@@ -240,3 +245,80 @@ def test_a_snapshot_from_the_previous_version_is_ignored(tmp_path):
 
     store = IssueStore(path)
     assert (store.issues, store.loaded_at) == ([], None)
+
+
+def test_merge_page_does_not_advance_requested_at_or_persist_partial_rows_and_rolls_back(tmp_path):
+    path = tmp_path / "snapshot.json"
+    t0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    moves = MoveTracker()
+    store = IssueStore(path, moves)
+    store.replace([issue(1, "old1", labels=("todo",)), issue(2, "keep2")], 1.0, t0)
+
+    changed = store.merge_page([issue(1, "new1", labels=("todo",)), issue(3, "added3")], 5.0)
+    assert changed is True
+    assert store.requested_at == 1.0
+    assert store.issues == [
+        issue(1, "new1", labels=("todo",)),
+        issue(2, "keep2"),
+        issue(3, "added3"),
+    ]
+    assert store.loaded_at == t0
+    assert IssueStore(path).issues == [issue(1, "old1", labels=("todo",)), issue(2, "keep2")]
+    assert store.merge_page([issue(1, "new1", labels=("todo",))], 5.0) is False
+
+    # A move confirmed mid-stream persists only the committed issues, never partial page rows.
+    moves.start(store.issues[0], "doing")
+    moves.confirm(store.issues[0].key, [AddLabel("doing"), RemoveLabels(("todo",))], at=6.0)
+    store.apply_moves()
+    assert IssueStore(path).issues == [issue(1, "old1", labels=("doing",)), issue(2, "keep2")]
+
+    # Rolling back after a mid-stream failure drops the partial row and keeps the confirmed move.
+    store.rollback_pages()
+    assert store.issues == [issue(1, "old1", labels=("doing",)), issue(2, "keep2")]
+
+
+def test_merge_page_rejects_stale_requested_at():
+    store = IssueStore()
+    store.replace([issue(1, "newer")], requested_at=5.0, loaded_at=None)
+
+    assert store.merge_page([issue(1, "older"), issue(2, "stale")], requested_at=4.0) is False
+    assert store.issues == [issue(1, "newer")]
+
+
+def test_merge_page_preserves_write_and_confirmed_move_against_stale_page_two():
+    moves = MoveTracker()
+    store = IssueStore(moves=moves)
+    assert store.merge_page([issue(1, "p1")], requested_at=2.0) is True
+
+    # Write arrives before Page 2 loads issue #2; update returns False without inserting it.
+    assert store.update(issue(2, "Written", labels=("todo",)), written_at=5.0) is False
+    assert [i.number for i in store.issues] == [1]
+
+    moves.start(issue(2, "Written", labels=("todo",)), "doing")
+    moves.confirm("octo/repo#2", [AddLabel("doing"), RemoveLabels(("todo",))], at=6.0)
+
+    assert store.merge_page([issue(2, "Stale", labels=("todo",))], requested_at=2.0) is True
+    assert store.issues == [issue(1, "p1"), issue(2, "Written", labels=("doing",))]
+
+
+def test_replace_sources_settles_each_source_at_its_own_requested_at():
+    moves = MoveTracker()
+    store = IssueStore(moves=moves)
+    moves.start(issue(1, labels=("todo",)), "doing")
+    moves.confirm("octo/repo#1", [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
+    moves.start(issue(2, labels=("todo",)), "doing")
+    moves.confirm("octo/repo#2", [AddLabel("doing"), RemoveLabels(("todo",))], at=5.0)
+
+    # Cached open source (requested_at=2.0 < 5.0) keeps local move on #1.
+    # Fresh search source (requested_at=8.0 > 5.0) accepts external GitHub state on #2.
+    store.replace_sources(
+        [
+            ([issue(1, labels=("todo",))], 2.0),
+            ([issue(2, labels=("review",))], 8.0),
+        ],
+        read_at=8.0,
+        loaded_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+    )
+
+    assert store.requested_at == 8.0
+    assert store.issues == [issue(1, labels=("doing",)), issue(2, labels=("review",))]

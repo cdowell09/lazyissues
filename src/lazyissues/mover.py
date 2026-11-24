@@ -4,10 +4,12 @@ One `Mover` serves every view. A view binds `m` to `pick` and passes its key pre
 `shortcut`, and redraws when `changed` publishes an issue.
 """
 
+from __future__ import annotations
+
 import webbrowser
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import events
@@ -18,14 +20,15 @@ from textual.screen import ModalScreen
 from textual.signal import Signal
 from textual.widgets import Static
 
-from lazyissues.bulk import Outcome
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.models import Issue, IssueDetail
-from lazyissues.move_picker import MovePicker
 from lazyissues.move_planner import MoveTo, Planner, Skip, Step, Target, apply, send
 from lazyissues.move_tracker import MoveTracker, Rejected
 from lazyissues.statuses import StatusRules
 from lazyissues.store import now
+
+if TYPE_CHECKING:
+    from lazyissues.bulk import Outcome
 
 
 class RejectedMoveBanner(ModalScreen[None]):
@@ -81,6 +84,8 @@ class Mover:
         # Publishes an issue as it is now, whenever a move of it starts or ends. Each view
         # then applies confirmed moves to its store (`IssueStore.apply_moves`) and redraws.
         self.changed: Signal[Sequence[Issue]] = Signal(app, "moved")
+        # Publishes `(issue, confirmed_at)` only for moves GitHub confirmed.
+        self.confirmed: Signal[Sequence[tuple[Issue, float]]] = Signal(app, "move_confirmed")
 
     def pick(self, issue: Issue, highlight: Target | None = None) -> None:
         """Offer `issue`'s moves, starting on `highlight`, and make the one chosen."""
@@ -113,6 +118,8 @@ class Mover:
         planner = await self.planner([issue])
         if planner is None:
             return
+        from lazyissues.move_picker import MovePicker
+
         picker = MovePicker(
             issue,
             planner.targets(issue),
@@ -135,7 +142,9 @@ class Mover:
             self._still_moving(issue)
             return
         self.changed.publish([issue])  # shows as pending
-        rejected, moved = await self._send_started(issue, plan)
+        rejected, moved, confirmed_at = await self._send_started(issue, plan)
+        if confirmed_at is not None:
+            self.confirmed.publish([(moved, confirmed_at)])
         self.changed.publish([moved])
         if rejected:
             self.app.push_screen(
@@ -158,31 +167,39 @@ class Mover:
         self.changed.publish([o.issue for o in started if not isinstance(o.plan, Skip)])
         done = []
         changed = []
+        confirmed: list[tuple[Issue, float]] = []
         for outcome in started:
             plan = outcome.plan
             if not isinstance(plan, Skip):
-                rejected, moved = await self._send_started(outcome.issue, plan)
+                rejected, moved, confirmed_at = await self._send_started(outcome.issue, plan)
                 changed.append(moved)
+                if confirmed_at is not None:
+                    confirmed.append((moved, confirmed_at))
                 if rejected:
                     self.moves.dismiss(rejected)  # the bulk summary lists it, not a banner each
                     outcome = replace(outcome, error=rejected.error)
             done.append(outcome)
+        if confirmed:
+            self.confirmed.publish(confirmed)
         self.changed.publish(changed)  # one redraw for all of them
         return done
 
-    async def _send_started(self, issue: Issue, plan: list[Step]) -> tuple[Rejected | None, Issue]:
+    async def _send_started(
+        self, issue: Issue, plan: list[Step]
+    ) -> tuple[Rejected | None, Issue, float | None]:
         """Send `plan`, the move of `issue` the tracker `start`ed, and settle it: confirmed,
         or rejected and kept in the tracker until dismissed (returned, to show). Also
-        returns the issue to show."""
+        returns the issue to show and the confirmation timestamp (None if rejected)."""
         try:
             await send(self.github, issue, plan)
         except GitHubError as e:
             self.moves.reject(issue.key, str(e))
-            return self.moves.rejected[-1], issue
-        self.moves.confirm(issue.key, plan, now())
+            return self.moves.rejected[-1], issue, None
+        confirmed_at = now()
+        self.moves.confirm(issue.key, plan, confirmed_at)
         if detail := self.details.get(issue.key):
             self.details[issue.key] = replace(detail, issue=apply(plan, detail.issue))
-        return None, apply(plan, issue)
+        return None, apply(plan, issue), confirmed_at
 
     def _still_moving(self, issue: Issue) -> None:
         pending = self.moves.pending(issue.key)

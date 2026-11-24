@@ -2,7 +2,7 @@
 
 import asyncio
 import webbrowser
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 
 from listed import plain, show_tab
 from textual.app import App
@@ -13,7 +13,7 @@ from lazyissues import demo
 from lazyissues.app import LazyIssuesApp
 from lazyissues.detail import IssueDetailScreen
 from lazyissues.fake import FakeGitHub
-from lazyissues.models import CloseReason, Issue
+from lazyissues.models import CloseReason, Issue, IssuePage
 from lazyissues.move_picker import MovePicker
 from lazyissues.mover import RejectedMoveBanner
 from lazyissues.statuses import StatusRules
@@ -39,6 +39,12 @@ class Gated(FakeGitHub):
         answer = await super().search_issues(query)
         await self.searches.wait()
         return answer
+
+    async def repo_open_issues_pages(self, repo: str) -> AsyncGenerator[IssuePage, None]:
+        pages = [page async for page in super().repo_open_issues_pages(repo)]
+        await self.searches.wait()
+        for page in pages:
+            yield page
 
     async def add_labels(self, repo: str, number: int, names: Sequence[str]) -> None:
         await self.writes.wait()

@@ -6,11 +6,12 @@ owns the tab's issue store and view state, and draws whatever
 `view_model.visible_groups` returns.
 """
 
-import asyncio
-from collections.abc import Iterable, Sequence
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.segment import Segment
 from rich.style import Style
@@ -19,6 +20,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.coordinate import Coordinate
+from textual.geometry import Size
 from textual.keys import key_to_character
 from textual.reactive import var
 from textual.selection import Selection
@@ -26,15 +28,15 @@ from textual.strip import Strip
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
+from textual.widgets.data_table import RowKey
 
-from lazyissues import bulk_actions, search
+from lazyissues import tab_loader
 from lazyissues.config import Config
-from lazyissues.detail import IssueDetailScreen
-from lazyissues.forms.form import Written
 from lazyissues.github import Gateway, GitHubError
 from lazyissues.keys import tab_bindings
 from lazyissues.models import Issue, IssueDetail
 from lazyissues.mover import Mover
+from lazyissues.repo_sync import RepoSync
 from lazyissues.statuses import DONE, StatusRules
 from lazyissues.store import IssueStore
 from lazyissues.view_model import (
@@ -49,13 +51,16 @@ from lazyissues.view_model import (
 )
 from lazyissues.writer import LINK_BINDINGS, WRITE_BINDINGS, IssueActions, Writer
 
+if TYPE_CHECKING:
+    from lazyissues.forms.form import Written
+
 # The first column is each row's checkbox, a column rather than Textual's row label: a
 # redraw drops the label column until the table is next idle, and a click in between
 # landed on the cell beside it. Columns stay put.
 COLUMNS = ("", "Issue", "Title", "Status", "Assignees", "Labels", "Updated")
 TITLE, MIN_TITLE = COLUMNS.index("Title"), 10  # the column that fills the width (`fit`)
 FOLDED, UNFOLDED = "▸", "▾"  # the fold arrows; a click on one folds or unfolds
-SEARCH_PAUSE = 0.1  # seconds after the last keystroke before a search filters
+SEARCH_PAUSE = 0.05  # seconds after the last keystroke before a search filters
 AGE_TICK = 60  # seconds between redraws of the data's age; past a minute it counts minutes
 CHECKED, UNCHECKED = "☑", "☐"  # whether a row is selected; a click toggles it
 DIM = Style(dim=True)  # what supports a row's text: counts, tree lines, a far parent
@@ -88,6 +93,11 @@ def arrow(folded: bool | None) -> str:
 INDENT = arrow(None)
 
 
+def _cell_width(cell: Text) -> int:
+    plain = cell.plain
+    return len(plain) if plain.isascii() and plain.isprintable() else cell.cell_len
+
+
 class IssueTable(DataTable):
     """The list's table, whose text a drag selects. (Textual's table has no selection.)
 
@@ -117,12 +127,21 @@ class IssueTable(DataTable):
 
         GitHub text is never markup, so string cells are shown as typed."""
         self.clear(columns=True)
-        cells = [[Text(cell) if isinstance(cell, str) else cell for cell in row] for _, row in rows]
-        for cell in (cell for row in cells for cell in row):
-            cell.overflow = "ellipsis"
-        issues = [row for (key, _), row in zip(rows, cells, strict=True) if key is not None]
+        cells: list[list[Text]] = []
+        issues: list[list[Text]] = []
+        for key, row in rows:
+            converted: list[Text] = []
+            for cell in row:
+                if isinstance(cell, str):
+                    converted.append(Text(cell, overflow="ellipsis"))
+                else:
+                    cell.overflow = "ellipsis"
+                    converted.append(cell)
+            cells.append(converted)
+            if key is not None:
+                issues.append(converted)
         natural = [
-            max([len(label), *(row[at].cell_len for row in issues)])
+            max([len(label), *(_cell_width(row[at]) for row in issues)])
             for at, label in enumerate(COLUMNS)
         ]
         padding = 2 * self.cell_padding * len(COLUMNS)
@@ -131,6 +150,28 @@ class IssueTable(DataTable):
             self.add_column(label, width=width)
         for (key, _), row in zip(rows, cells, strict=True):
             self.add_row(*row, key=key)
+
+    def _update_dimensions(self, new_rows: Iterable[RowKey]) -> None:
+        # Textual's DataTable measures every cell of every new row on idle even when
+        # every column has a fixed width and every row is height 1 (textual<9).
+        row_keys = list(new_rows)
+        if (
+            self._labelled_row_exists
+            or any(column.auto_width for column in self.columns.values())
+            or any(
+                (row := self.rows.get(key)) is not None
+                and (row.auto_height or row.label is not None)
+                for key in row_keys
+            )
+        ):
+            super()._update_dimensions(row_keys)
+            return
+        data_cells_width = sum(column.get_render_width(self) for column in self.columns.values())
+        header_height = self.header_height if self.show_header else 0
+        self.virtual_size = Size(
+            data_cells_width + self._row_label_column_width,
+            self._total_row_height + header_height,
+        )
 
     def _get_row_style(self, row_index: int, base_style: Style) -> Style:
         # Textual's private hook (as of 8.2, hence `textual<9`) for the style of a row
@@ -168,7 +209,6 @@ class IssueList(IssueActions, Widget):
     IssueList.-searching #search { display: block; }
     IssueList #filters { dock: bottom; color: $text-muted; }
     IssueList #refreshing { dock: bottom; color: $text-muted; display: none; }
-    IssueList.-refreshing #refreshing { display: block; }
     """
     BINDINGS = [
         *WRITE_BINDINGS,
@@ -191,6 +231,7 @@ class IssueList(IssueActions, Widget):
     LABEL: ClassVar[str]  # the tab's title
     QUERY: ClassVar[str]  # GitHub search for the tab; states are added unless it names one
     EMPTY: ClassVar[str]  # shown when the tab has no issues at all
+    NEEDS_VIEWER: ClassVar[bool] = False
 
     refreshing = var(False)
     state = var(ViewState(), init=False)
@@ -205,6 +246,8 @@ class IssueList(IssueActions, Widget):
         writer: Writer,
         *,
         id: str,
+        repo_sync: RepoSync | None = None,
+        on_first_load: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(id=id)
         self.config = config
@@ -213,8 +256,12 @@ class IssueList(IssueActions, Widget):
         self.details = details  # the app's detail cache, shared by every view
         self.mover = mover  # the app's, shared by every view
         self.writer = writer  # the app's, shared by every view
+        self.repo_sync = repo_sync
+        self._on_first_load = on_first_load
         self._loaded = False  # the first refresh has started
+        self._silent = False  # background preload: suppress error toasts while hidden
         self._read_again = False  # a reload was asked for during a refresh
+        self._force_again = False  # any queued reload asked for a forced fetch
         self._search_timer: Timer | None = None  # filters once typing pauses
         self.rules = StatusRules(config)
         self.set_reactive(IssueList.state, ViewState(show_done=config.preferences.show_done))
@@ -234,6 +281,18 @@ class IssueList(IssueActions, Widget):
         """The searches whose results this tab lists, merged."""
         return [self.QUERY]
 
+    async def prepare_sync(self, *, force: bool) -> None:
+        """Per-tab async setup that runs alongside `RepoSync.sync_repos`."""
+        return None
+
+    def derive_open(self, issues: Sequence[Issue], viewer: str | None) -> list[Issue]:
+        """Filter open issues synced from the repo set down to those this tab lists."""
+        return list(issues)
+
+    def record_viewer(self, viewer: str | None) -> None:
+        """Accept the viewer login piggybacked on a page response."""
+        return None
+
     def grouping(self) -> Grouping:
         return by_status(self.rules)
 
@@ -249,12 +308,14 @@ class IssueList(IssueActions, Widget):
         self.writer.changed.subscribe(self, self._on_written)
         self.set_interval(AGE_TICK, self._show_filters)
         if self.store.issues:
-            self.redraw()
+            # Inactive TabPanes still report display=True during mount; defer to on_show.
+            self._stale = True
 
     def on_show(self) -> None:
+        self._silent = False
         if not self._loaded:  # the first refresh waits until the tab is shown
             self._loaded = True
-            self.reload()
+            self.reload(force=False)
         if self._stale:
             self.show()
 
@@ -273,7 +334,10 @@ class IssueList(IssueActions, Widget):
             self._stale = True
 
     def watch_refreshing(self, refreshing: bool) -> None:
-        self.set_class(refreshing, "-refreshing")
+        # Set display on the indicator directly instead of toggling a CSS class on
+        # IssueList, which triggers a full style-recalculation across child table cells.
+        for indicator in self.query("#refreshing"):
+            indicator.display = refreshing
 
     def watch_state(self, old: ViewState, new: ViewState) -> None:
         if old.selected != new.selected and replace(old, selected=new.selected) == new:
@@ -292,26 +356,44 @@ class IssueList(IssueActions, Widget):
         self.config = config
         self.rules = StatusRules(config)
         self.redraw()
-        self.reload()
+        self.reload(force=False)
 
-    def reload(self) -> None:
+    def reload(self, *, force: bool = True) -> None:
         """Refresh from GitHub in the background; during a refresh, read again after it.
 
         A tab not yet shown only waits for its first show, which refreshes it."""
         if not self._loaded:
             return
+        self._silent = False
         if self.refreshing:
             self._read_again = True
+            self._force_again = self._force_again or force
             return
         self.refreshing = True
-        self.run_worker(self._load())
+        self.run_worker(self._load(force=force))
 
-    async def _load(self) -> None:
+    async def preload(self) -> None:
+        """Refresh this tab in the background before it is first shown."""
+        if self._loaded:
+            return
+        self._loaded = True
+        self._silent = True
+        self.refreshing = True
+        await self._load(force=False)
+
+    async def _load(self, *, force: bool = True) -> None:
         try:
+            next_force = force
             while True:
                 with_done, config = self.state.show_done, self.config
                 self._read_again = False
-                await self.store.refresh(self._read(with_done))
+                self._force_again = False
+                if self.repo_sync is not None:
+                    await tab_loader.load_with_repo_sync(
+                        self, self.repo_sync, config, with_done, force=next_force
+                    )
+                else:
+                    await tab_loader.load_with_search(self, config, with_done)
                 if (
                     (with_done or not self.state.show_done)
                     and config is self.config
@@ -319,27 +401,22 @@ class IssueList(IssueActions, Widget):
                 ):
                     break  # otherwise done was shown, the config changed or a reload was
                     # asked for mid-read; read again
+                next_force = self._force_again
         except GitHubError as e:
+            self.store.rollback_pages()
             self.error = f"Couldn't refresh: {e}"
-            title = f"Couldn't refresh {self.LABEL}"
-            self.notify(str(e), title=title, severity="error", timeout=10)
+            if not self._silent:
+                title = f"Couldn't refresh {self.LABEL}"
+                self.notify(str(e), title=title, severity="error", timeout=10)
+            elif not all(widget.display for widget in self.ancestors_with_self):
+                self._loaded = False
         else:
             self.error = None
         finally:
             self.refreshing = False
         self.redraw()
-
-    async def _read(self, with_done: bool) -> list[Issue]:
-        since = None
-        if with_done:
-            since = datetime.now(UTC).date() - timedelta(days=self.config.done_window_days)
-        searches = [
-            self.github.search_issues(search.scoped(query, self.config.repo_names))
-            for tab_query in await self.queries()
-            for query in search.with_states(tab_query, since)
-        ]
-        found = await asyncio.gather(*searches)
-        return list({issue.key: issue for issues in found for issue in issues}.values())
+        if self.error is None and self._on_first_load is not None:
+            self._on_first_load()
 
     def show(self) -> None:
         """Draw the visible groups, keeping the cursor on the same issue if it's still listed."""
@@ -485,6 +562,8 @@ class IssueList(IssueActions, Widget):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if not 0 <= event.cursor_row < len(self._rows) or self._rows[event.cursor_row][1] is None:
             return  # a group header
+        from lazyissues.detail import IssueDetailScreen
+
         index = sum(issue is not None for _, issue in self._rows[: event.cursor_row])
         self.app.push_screen(
             IssueDetailScreen(
@@ -515,7 +594,7 @@ class IssueList(IssueActions, Widget):
         if any(shown):
             self.redraw()
         if any(w.regroups and not on for w, on in zip(writes, shown, strict=True)):
-            self.reload()  # only this tab's search knows whether an issue belongs here now
+            self.reload(force=False)
 
     def selected(self) -> Issue | None:
         """The issue under the cursor; None on a group header or an empty list."""
@@ -571,7 +650,7 @@ class IssueList(IssueActions, Widget):
         focus = None if not show and self.state.focus == DONE else self.state.focus
         self.state = replace(self.state, show_done=show, focus=focus)
         if show:
-            self.reload()
+            self.reload(force=False)
 
     def action_fold(self) -> None:
         """Fold the parent of the issue under the cursor, or else its group."""
@@ -622,6 +701,8 @@ class IssueList(IssueActions, Widget):
         if not issues:
             self.notify("Select issues with Space, or every one shown with A.", title="Bulk")
             return
+        from lazyissues import bulk_actions
+
         self.app.run_worker(
             bulk_actions.run(self.mover, self.writer, issues, self.action_clear_selection)
         )
@@ -630,5 +711,7 @@ class IssueList(IssueActions, Widget):
 def bound_keys(tabs: Sequence[str]) -> set[str]:
     """Every key a list or the detail binds, and the app's keys for its `tabs`, which a
     status shortcut can't take over; as the character typed, where a key has one."""
+    from lazyissues.detail import IssueDetailScreen
+
     bindings = [*IssueList.BINDINGS, *IssueDetailScreen.BINDINGS, *tab_bindings(tabs)]
     return {key_to_character(key) or key for key in BindingsMap(bindings).key_to_bindings}

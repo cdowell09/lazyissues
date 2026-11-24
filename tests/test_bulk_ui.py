@@ -429,3 +429,34 @@ async def test_a_bulk_move_shows_every_issue_pending_while_it_runs(monkeypatch):
         release.set()
         await until(pilot, lambda: isinstance(app.screen, BulkSummary))
         assert not any(app.moves.pending(key) for key in moving)
+
+
+async def test_rejected_bulk_move_does_not_poison_repo_sync_on_other_tabs():
+    github = demo.github()
+    github.read_only.add("octo-dev/lanternfish")
+    app = LazyIssuesApp(demo.config(), github)
+    async with app.run_test() as pilot:
+        await ready(pilot)
+        await pilot.press("A", "B")
+        await choose(pilot, "Move")
+        await choose(pilot, "Move to In Progress  (3 of 5 can)")
+        await until(pilot, lambda: isinstance(app.screen, BulkConfirm))
+        await pilot.press("enter")
+        await until(pilot, lambda: isinstance(app.screen, BulkSummary))
+        await pilot.press("escape")
+        await ready(pilot)
+
+        # RepoSync must reflect confirmed tidepool#15 and leave rejected lanternfish#9 untouched.
+        from lazyissues.statuses import StatusRules
+
+        rules = StatusRules(demo.config())
+        updates = [u async for u in app.repo_sync.sync_repos(demo.config().repo_names)]
+        by_key = {issue.key: issue for issue in updates[-1].issues}
+        assert rules.status_of(by_key[TIDE_15]).name == "In Progress"
+        assert rules.status_of(by_key[LANTERN_9]).name == "No status"
+
+        await open_tab(pilot, "milestones")
+        milestones = app.query_one("#milestones", IssueList)
+        milestones_by_key = {issue.key: issue for issue in milestones.store.issues}
+        assert rules.status_of(milestones_by_key[LANTERN_9]).name == "No status"
+        assert rules.status_of(milestones_by_key[TIDE_15]).name == "In Progress"

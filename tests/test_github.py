@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from lazyissues.github import GitHubError, GraphQLGateway
-from lazyissues.models import Event, Issue, Milestone, Project, ProjectField
+from lazyissues.models import Event, Issue, IssuePage, Milestone, Project, ProjectField
 
 
 def node(number: int) -> dict:
@@ -604,3 +604,261 @@ async def test_a_fresh_milestone_read_refetches_for_current_counts():
     await github.repo_milestones("o/r")
     assert (await github.repo_milestones("o/r", fresh=True))[0].open == 2
     assert len(sent) == 2
+
+
+def test_gh_token_prefers_env_vars_before_calling_gh(monkeypatch):
+    from lazyissues.github import gh_token
+
+    monkeypatch.setattr("lazyissues.github.subprocess.run", lambda *a, **kw: pytest.fail("ran gh"))
+    monkeypatch.setenv("GH_TOKEN", "  from-gh-token  ")
+    monkeypatch.setenv("GITHUB_TOKEN", "from-github-token")
+    assert gh_token() == "from-gh-token"
+
+    monkeypatch.setenv("GH_TOKEN", "   ")
+    assert gh_token() == "from-github-token"
+
+
+async def test_gateway_resolves_token_lazily_once_across_concurrent_reads():
+    import asyncio
+
+    calls: list[int] = []
+
+    def loader() -> str:
+        calls.append(1)
+        return "lazy-secret"
+
+    seen_auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("Authorization"))
+        return httpx.Response(
+            200,
+            json={"data": {"search": {"pageInfo": {"hasNextPage": False}, "nodes": []}}},
+        )
+
+    github = GraphQLGateway(transport=httpx.MockTransport(handler), token_loader=loader)
+    assert calls == []
+    await asyncio.gather(github.search_issues("a"), github.search_issues("b"))
+    assert len(calls) == 1
+    assert seen_auth == ["bearer lazy-secret", "bearer lazy-secret"]
+
+
+async def test_gateway_lazy_token_error_surfaces_as_github_error():
+    def missing() -> str:
+        raise GitHubError("`gh` isn't logged in. Run `gh auth login`.")
+
+    github = GraphQLGateway(
+        transport=httpx.MockTransport(lambda req: pytest.fail("sent request without token")),
+        token_loader=missing,
+    )
+    with pytest.raises(GitHubError, match="gh auth login"):
+        await github.search_issues("a")
+
+
+async def test_search_issues_pages_streams_pages_and_populates_whoami_from_page_one():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        after = body["variables"]["after"]
+        if after is None:
+            data = {
+                "viewer": {"login": "me"},
+                "search": {
+                    "issueCount": 2,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    "nodes": [node(1)],
+                },
+            }
+            return httpx.Response(200, json={"data": data}, headers={"X-OAuth-Scopes": "repo, org"})
+        data = {
+            "search": {
+                "issueCount": 2,
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [node(2)],
+            }
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    pages = [page async for page in github.search_issues_pages("is:open repo:o/r")]
+
+    assert [len(page.issues) for page in pages] == [1, 1]
+    assert [page.issues[0].number for page in pages] == [1, 2]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (2, True, "me"),
+        (2, False, None),
+    ]
+    assert "viewer { login }" in sent[0]["query"]
+    assert "viewer { login }" not in sent[1]["query"]
+
+    assert await github.whoami() == ("me", {"repo", "org"})
+    assert len(sent) == 2
+
+    pages_again = [page async for page in github.search_issues_pages("is:open repo:o/r")]
+    assert "viewer { login }" not in sent[2]["query"]
+    assert pages_again[0].viewer == "me"
+
+
+async def test_repo_open_issues_pages_streams_pages_caches_ids_and_viewer():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if body["query"].lstrip().startswith("mutation"):
+            return httpx.Response(200, json={"data": {"reopenIssue": {"clientMutationId": None}}})
+        after = body["variables"]["after"]
+        if after is None:
+            data = {
+                "viewer": {"login": "me"},
+                "repository": {
+                    "id": "R_1",
+                    "issues": {
+                        "totalCount": 2,
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        "nodes": [node(1)],
+                    },
+                },
+            }
+            return httpx.Response(200, json={"data": data}, headers={"X-OAuth-Scopes": "repo"})
+        data = {
+            "repository": {
+                "id": "R_1",
+                "issues": {
+                    "totalCount": 2,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [node(2)],
+                },
+            }
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    pages = [page async for page in github.repo_open_issues_pages("o/r")]
+
+    assert [page.issues[0].number for page in pages] == [1, 2]
+    assert [(p.total_count, p.has_next_page, p.viewer) for p in pages] == [
+        (2, True, "me"),
+        (2, False, None),
+    ]
+    assert "states: [OPEN]" in sent[0]["query"]
+    assert "orderBy: {field: UPDATED_AT, direction: DESC}" in sent[0]["query"]
+    assert sent[0]["variables"] == {"owner": "o", "name": "r", "after": None}
+    assert sent[1]["variables"] == {"owner": "o", "name": "r", "after": "c1"}
+    assert "viewer { login }" in sent[0]["query"]
+    assert "viewer { login }" not in sent[1]["query"]
+
+    assert await github.whoami() == ("me", {"repo"})
+    assert len(sent) == 2
+
+    await github.reopen_issue("o/r", 1)
+    assert len(sent) == 3
+    assert mutation(sent[2]) == ("reopenIssue", {"issueId": "I_1"})
+
+
+async def test_repo_open_issues_pages_early_close_never_fetches_page_two():
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        data = {
+            "viewer": {"login": "me"},
+            "repository": {
+                "id": "R_1",
+                "issues": {
+                    "totalCount": 301,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    "nodes": [node(1)],
+                },
+            },
+        }
+        return httpx.Response(200, json={"data": data})
+
+    github = gateway(handler)
+    stream = github.repo_open_issues_pages("o/r")
+    first = await anext(stream)
+    await stream.aclose()
+
+    assert isinstance(first, IssuePage)
+    assert first.total_count == 301
+    assert first.has_next_page is True
+    assert len(sent) == 1
+
+
+async def test_repo_open_issues_pages_raises_on_missing_repository():
+    handler, _ = answer({"repository": None})
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        _ = [page async for page in gateway(handler).repo_open_issues_pages("o/missing")]
+
+
+async def test_search_issues_pages_exact_search_limit_boundary(monkeypatch):
+    monkeypatch.setattr("lazyissues.github.SEARCH_LIMIT", 3)
+
+    # Exact 3 issues across two pages: keeps all 3 and reports has_next_page=False on final page.
+    def exact_handler(request: httpx.Request) -> httpx.Response:
+        after = json.loads(request.content)["variables"]["after"]
+        if after is None:
+            page = {
+                "issueCount": 3,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                "nodes": [node(1), node(2)],
+            }
+        else:
+            page = {
+                "issueCount": 3,
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [node(3)],
+            }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    pages = [p async for p in gateway(exact_handler).search_issues_pages("is:open")]
+    assert [issue.number for p in pages for issue in p.issues] == [1, 2, 3]
+    assert [p.has_next_page for p in pages] == [True, False]
+
+    # 4 issues across pages: truncates final page to exact [1, 2, 3] and never fetches Page 3.
+    calls = 0
+
+    def over_limit_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        after = json.loads(request.content)["variables"]["after"]
+        if after is None:
+            page = {
+                "issueCount": 4,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                "nodes": [node(1), node(2)],
+            }
+        else:
+            page = {
+                "issueCount": 4,
+                "pageInfo": {"hasNextPage": True, "endCursor": "c2"},
+                "nodes": [node(3), node(4)],
+            }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    truncated = [p async for p in gateway(over_limit_handler).search_issues_pages("is:open")]
+    assert calls == 2
+    assert [issue.number for p in truncated for issue in p.issues] == [1, 2, 3]
+    assert [p.has_next_page for p in truncated] == [True, False]
+
+
+async def test_issue_pages_stops_when_end_cursor_is_none():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        page = {
+            "issueCount": 2,
+            "pageInfo": {"hasNextPage": True, "endCursor": None},
+            "nodes": [node(1)],
+        }
+        return httpx.Response(200, json={"data": {"search": page}})
+
+    pages = [p async for p in gateway(handler).search_issues_pages("is:open")]
+    assert calls == 1
+    assert len(pages) == 1
+    assert [issue.number for issue in pages[0].issues] == [1]
+    assert pages[0].has_next_page is False

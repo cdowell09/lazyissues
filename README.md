@@ -23,7 +23,7 @@ Five tabs: **My Work**, **Team**, **Milestones**, **Unassigned**, and **Filters*
 ## Requirements
 
 - Python 3.12+
-- The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope: `gh auth refresh -s project`
+- The [GitHub CLI](https://cli.github.com/) logged in with the `project` scope (`gh auth refresh -s project`), or a `GH_TOKEN` / `GITHUB_TOKEN` environment variable with the `project` scope
 
 ## Tabs
 
@@ -162,7 +162,7 @@ If you typed text or changed a pick (labels, assignees, milestone), `Esc` asks b
 
 ## Cache
 
-The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup only the tab you start on refreshes; each other tab refreshes the first time you open it. Deleting it is always safe.
+The last loaded issues are saved in your platform's cache directory (`~/Library/Caches/lazyissues` on macOS, `~/.cache/lazyissues` on Linux, `%LOCALAPPDATA%\lazyissues\Cache` on Windows), one snapshot per tab and repo set. lazyissues shows it at startup while it refreshes. At startup, built-in tabs share one open-issue sync per repository (for repos with up to 300 open issues; larger repos fall back to GitHub issue search). The start tab loads first, then the other built-in tabs pre-refresh sequentially in the background; saved filters refresh when you run them. Deleting the cache is always safe.
 
 The line under each list says how old its issues are (`updated 4m ago`), from startup on. If a refresh fails, the list keeps its cached issues and the line says so and when they were loaded (`refresh failed · cached 09:12`) until a refresh succeeds.
 
